@@ -11,4 +11,17 @@ services:
     environment:  
       - ENVIRONMENT=dev
       - TESTING=0
+    depends_on:
+      - web-db
+
+  web-db:
+    build:
+      context: ./project/db/
+      dockerfile: Dockerfile
+    expose:
+      - 5432
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+
 
