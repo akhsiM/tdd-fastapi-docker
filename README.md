@@ -11,10 +11,11 @@
 - [Docker Configuration](#docker-configuration)
   - [Dockerfile](#dockerfile)
   - [`docker-compose.yml`](#docker-composeyml)
+- [Postgres Setup](#postgres-setup)
 
 # Introduction
 
-An asynchronous text summarization API built with Test-Driven Development. The API follows RESTful design principles, using basic HTTP verbs: GET, POST, PUT and DELETE
+An asynchronous text summarization API built with Test-Driven Development. The API follows RESTful design principles, using basic HTTP verbs: GET, POST, PUT and DELETE.
 
 | Endpoint | HTTP Method | CRUD Method | Result |
 | -------- | ----------- | ----------- | ------ |
@@ -24,6 +25,11 @@ An asynchronous text summarization API built with Test-Driven Development. The A
 | /summaries/:id | PUT | UPDATE | update a summary |
 | /summaries/:id | DELETE | DELETE | delete a summary |
 
+Along with **FastAPI**, we'll use **Docker** to quickly set up our local development environment and simplify deployment. A **PostgreSQL** database will be used, with **Tortoise ORM**, an async ORM, being used to interact with this it. `pytest` will be used instead of `unittest` for writing unit and integration test to test the API.
+
+Finally, the code will be stored on a Github repository. We'll then use **GitHub Actions** to run tests, before deploying the app to Heroku.
+
+`pytest`
 # Getting Started
 
 ## Init
@@ -331,5 +337,8 @@ $ docker-compose up -d
 At this point, we should be able to browse to http://localhost:8004/ping:
 ![](./code_img/README-2021-09-12-23-25-04.png)
 
+# Postgres Setup
 
+What we need to do now is to configure Postgres, get it up and running in another container, then link it to the `web` service.
 
+Then, we'll set up Tortoise ORM and configure a model
