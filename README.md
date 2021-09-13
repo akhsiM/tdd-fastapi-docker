@@ -17,6 +17,14 @@
   - [Add configuration to FastAPI app](#add-configuration-to-fastapi-app)
   - [Build the new image & spin the containers](#build-the-new-image--spin-the-containers)
 - [Toirtoise ORM](#toirtoise-orm)
+  - [Setting UP](#setting-up)
+  - [Defining the model](#defining-the-model)
+  - [Registering `tortoise`](#registering-tortoise)
+  - [Fire up containers](#fire-up-containers)
+- [Migrations](#migrations)
+  - [Kill the containers](#kill-the-containers)
+  - [Turn off schema auto-generation](#turn-off-schema-auto-generation)
+  - [Install and configure Aerich](#install-and-configure-aerich)
 
 # Introduction
 
@@ -394,6 +402,8 @@ services:
     environment:  
       - ENVIRONMENT=dev
       - TESTING=0
+      - DATABASE_URL=postgres://postgres:postgres@web-db:5432/web_dev
+      - DATABASE_TEST_URL=postgres://postgres:postgres@web-db:5432/web_test
     depends_on:
       - web-db
 
@@ -540,4 +550,258 @@ $ docker-compose exec web-db psql -U postgres
 ```
 
 # Toirtoise ORM
+
+Tortoise ORM is an async ORM inspired by Django ORM that's designed for ease of use.
+
+Tortoise ORM was built with relations in mind and admiration for the excellent and popular Django ORM.
+
+## Setting UP
+
+After install `tortoise-orm`, we create a new folder called `models/` within `app/`. Within this, we have:
+
+```
+app/models
+├── __init__.py
+└── tortoise.py
+```
+
+## Defining the model
+
+```py
+# tortoise.py
+
+from tortoise import fields, models
+
+
+class TextSummary(models.Model):
+    url = fields.TextField()
+    summary = fields.TextField()
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.url
+```
+
+Here we defined a database model named `TextSummary` with a few fields. The syntax is very similar to Django ORM, I felt right at home.
+
+## Registering `tortoise`
+
+Tortoise ORM has a lightweight integration util `tortoise.contrib.fastapi` that has one single function `register_tortoise` which sets up TortoiseORM on startupand cleans up on teardown.
+
+```python
+# project/app/main.py
+
+from fastapi import FastAPI, Depends
+from app.config import get_settings, Settings
+from tortoise.contrib.fastapi import register_tortoise
+
+app = FastAPI()
+
+
+register_tortoise(
+    app,
+    db_url=os.environ.get('DATABASE_URL'),
+    modules={'models': ['app.models.tortoise']},
+    generate_schemas=True,
+    add_exception_handlers=True
+)
+
+@app.get('/ping')
+async def pong(settings: Settings=Depends(get_settings)):
+    return {
+        'ping': 'pong!',
+        'environment': settings.environment,
+        'testing': settings.testing
+    }
+```
+
+## Fire up containers
+
+After this, we can sanity check by:
+```sh
+$ docker-compose up -d --build
+```
+
+Then, we can check if the FastApi app is running fine:
+```sh
+$ docker-compose logs web
+```
+```
+...
+web_1     | INFO:     Started server process [30]
+web_1     | INFO:     Waiting for application startup.
+web_1     | INFO:     Application startup complete.
+```
+
+We can should also ensure that the `textsummary` table was created:
+```sh
+$ docker-compose exec web-db psql -U postgres
+psql (13.4)
+Type "help" for help.
+
+postgres=# \c web_dev
+You are now connected to database "web_dev" as user "postgres".
+web_dev=# \dt
+            List of relations
+ Schema |    Name     | Type  |  Owner   
+--------+-------------+-------+----------
+ public | textsummary | table | postgres
+(1 row)
+
+web_dev=# \q
+```
+
+http://localhost:8004/ping should also continue to work.
+
+
+# Migrations
+
+Similarly to Django ORM with its own migration solution, Tortoise-ORM also has a database migration tool [Aerich](https://github.com/tortoise/aerich). We need to take a few steps back to configure it.
+
+First, we need to bring down and remove the containers to destroy the current database table since we want Aerich to manage the schema.
+
+## Kill the containers
+
+We'll run the following:
+```sh
+$ docker-compose down -v
+```
+
+Why not `docker-compose stop`? `docker-compose stop` will stop the containers, but it will not remove them. `docker-compose down` stops the containers, and also removes the stopped containers as well as any networks that were created. The `-v` flag is on step further, it doesn't stand for `--verbose` but rather `--volume`, i.e remove all volumes too.
+
+```
+$ docker-compose down -v       
+Stopping tdd-fastapi-docker_web_1    ... done
+Stopping tdd-fastapi-docker_web-db_1 ... done
+Removing tdd-fastapi-docker_web_1    ... done
+Removing tdd-fastapi-docker_web-db_1 ... done
+Removing network tdd-fastapi-docker_default
+```
+
+## Turn off schema auto-generation
+
+After this, we need to update `register_tortoise` helper in `project/app/models.tortoise.py` so that the schemas are **not** automatically generated.
+```py
+register_tortoise(
+    app,
+    db_url=os.environ.get("DATABASE_URL"),
+    modules={"models": ["app.models.tortoise"]},
+    generate_schemas=False,
+    add_exception_handlers=True,
+)
+```
+
+Now, we can try spinning up the containers and volumes, and make sure that the table `textsummary` is **not** created automatically.
+
+```sh
+$ docker-compose exec web-db psql -U postgres
+psql (13.4)
+Type "help" for help.
+
+postgres=# \c web_dev
+You are now connected to database "web_dev" as user "postgres".
+web_dev=# \dt
+Did not find any relations.
+web_dev=# \q
+```
+
+## Install and configure Aerich
+
+```sh
+$ poetry add aerich
+Using version ^0.5.8 for aerich
+
+Updating dependencies
+Resolving dependencies... (1.5s)
+
+Writing lock file
+
+Package operations: 3 installs, 0 updates, 0 removals
+
+  • Installing ddlparse (1.10.0)
+  • Installing dictdiffer (0.9.0)
+  • Installing aerich (0.5.8)
+```
+
+Then, update and fire up the containers
+```sh
+$ docker-compose up -d --build
+```
+
+We now need to configure Aerich. We'll do this in a new file called `project/app/db.py`
+```py
+import os
+
+TORTOISE_ORM = {
+    "connections": {"default": os.environ.get('DATABASE_URL')},
+    "apps": {
+        "models": {
+            "models": ["app.models.tortoise", "aerich.models"],
+            "default_connection": "default",
+        },
+    },
+}
+```
+
+Now, we are ready to **init Aerich**:
+```sh
+$ docker-compose exec web aerich init -t app.db.TORTOISE_ORM
+Success create migrate location ./migrations
+Success generate config file aerich.ini
+```
+
+Adding the `-t` lets `aerich` to fire up using the Tortoise-ORM config module dict we created above. 
+
+After the command ran, a new config file `aerich.ini` was created.
+```ini
+[aerich]
+tortoise_orm = app.db.TORTOISE_ORM
+location = ./migrations
+src_folder = ./.
+```
+
+Then, we can create our first migration:
+```sh
+$ docker-compose exec web aerich init-db
+Success create app migrate location migrations/models
+Success generate schema for app "models"
+```
+
+Similarly to how migrations are managed within Django, the above command created a new folder `migrations/models` within `project/`, with a migration file inside it `0_20210913132135_init.sql`:
+```sql
+-- upgrade --
+CREATE TABLE IF NOT EXISTS "textsummary" (
+    "id" SERIAL NOT NULL PRIMARY KEY,
+    "url" TEXT NOT NULL,
+    "summary" TEXT NOT NULL,
+    "created_at" TIMESTAMPTZ NOT NULL  DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS "aerich" (
+    "id" SERIAL NOT NULL PRIMARY KEY,
+    "version" VARCHAR(255) NOT NULL,
+    "app" VARCHAR(20) NOT NULL,
+    "content" JSONB NOT NULL
+);
+```
+
+Hooray! We should now see the new database tables within our Postgres DB:
+```sh
+$ docker-compose exec web-db psql -U postgres
+psql (13.4)
+Type "help" for help.
+
+postgres=# \c web_dev
+You are now connected to database "web_dev" as user "postgres".
+web_dev=# \dt
+            List of relations
+ Schema |    Name     | Type  |  Owner   
+--------+-------------+-------+----------
+ public | aerich      | table | postgres
+ public | textsummary | table | postgres
+(2 rows)
+
+web_dev=# \q
+```
+
+
 
