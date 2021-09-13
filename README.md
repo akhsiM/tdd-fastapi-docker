@@ -37,6 +37,7 @@
 - [Database Init](#database-init)
 - [Generate schema instead of using `aerich` (situational)](#generate-schema-instead-of-using-aerich-situational)
 - [Using `aerich` instead](#using-aerich-instead)
+- [Pydantic Model](#pydantic-model)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -1287,6 +1288,18 @@ $ docker-compose exec web aerich upgrade
 Success upgrade 0_20210913132135_init.sql
 ```
 
+# Pydantic Model
+
+In addition to the Tortoise-ORM models, we'll also implement some Pydantic models. We'll create a simple model with just one required field - a `url`.
+```py
+# app/models/pydantic.py
+
+from pydantic import BaseModel
+
+
+class SummaryPayloadSchema(BaseModel):
+    url: str
+```
 
 # Others
 
