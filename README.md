@@ -31,6 +31,9 @@
   - [Fire up](#fire-up)
   - [Writing Tests](#writing-tests)
   - [How to write tests](#how-to-write-tests)
+- [App Structure and Refactoring](#app-structure-and-refactoring)
+  - [`APIRouter`](#apirouter)
+  - [New Project Structure](#new-project-structure)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -918,6 +921,177 @@ tests/test_ping.py .                                                  [100%]
 When writing tests, we should try to follow the [GivenWhenThen](#givenwhenthen) pattern to help make the process of writing tests easier and faster.
 
 Using this pattern also helps communicate the purpose of our tests better so that the code is easier to read by our future self, as well as our colleagues.
+
+# App Structure and Refactoring
+
+This is the current structure of our project:
+```
+├── docker-compose.yml
+├── project
+│   ├── aerich.ini
+│   ├── app
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── models
+│   ├── db
+│   │   ├── create.sql
+│   │   └── Dockerfile
+│   ├── Dockerfile
+│   ├── entrypoint.sh
+│   ├── migrations
+│   │   └── models
+│   ├── poetry.lock
+│   ├── pyproject.toml
+│   ├── requirements.txt
+│   └── tests
+│       ├── conftest.py
+│       ├── __init__.py
+│       └── test_ping.py
+└── README.md
+```
+
+Now we are refactoring the app, adding in FastAPI's `APIRouter`, a new database function and a Pydantic `Model`.
+
+## `APIRouter`
+
+`APIRouter` can be thought of as "mini `FastAPI`" class, with all the same options supported. `APIRouter` are used to break apart our api into different routes.
+
+```sh
+$ mkdir project/app/api
+$ touch project/app/api/__init__.py
+```
+
+Then, we move the logic for `/ping` route to `api/ping.py`:
+```py
+# project/app/api/ping.py
+from fastapi import APIRouter, Depends
+from app.config import get_settings, Settings
+
+
+router = APIRouter()
+
+
+@router.get('/ping')
+async def pong(settings: Settings=Depends(get_settings)):
+    return {
+        'ping': 'pong!',
+        'environment': settings.environment,
+        'testing': settings.testing
+    }
+```
+
+The view fucntion is exactly the same as that in the `main.py` file. Now, we come back to this file to remove the old route and wire the router up to the main app, and use a function to initialize a new app:
+```py
+# project/app/main.py
+import os
+from fastapi import FastAPI, Depends
+from tortoise.contrib.fastapi import register_tortoise
+from app.api import ping
+
+
+app = FastAPI()
+
+
+def create_application() -> FastAPI:
+    application = FastAPI()
+
+    register_tortoise(
+        app,
+        db_url=os.environ.get("DATABASE_URL"),
+        modules={"models": ["app.models.tortoise"]},
+        generate_schemas=False,
+        add_exception_handlers=True,
+    )
+
+    application.include_router(ping.router)
+
+    return application
+
+
+app = create_application()
+```
+
+After this, we should make sure that http://localhost:8004/ping and http://localhost:8004/docs still work.
+
+We also need to update the `test_app` fixture in `project/tests/conftest.py` to use the newly created `create_application` function to create a new instance of FastAPI for testing purposes:
+```py
+#project/tests/conftest.py
+import os 
+import pytest
+from starlette.testclient import TestClient
+from app.main import create_application
+from app.config import get_settings, Settings
+
+
+def get_settings_override():
+    return Settings(testing=1, database_url=os.environ.get('DATABASE_TEST_URL'))
+
+
+@pytest.fixture(scope='module')
+def test_app():
+    # setup
+    app = create_application()
+    main.app.dependency_overrides[get_settings] = get_settings_override
+    with TestClient(app) as test_client:
+        #testing
+        yield test_client
+    
+    # teardown
+```
+
+Our test should still work:
+```sh
+$ docker-compose exec web python -m pytest
+============================ test session starts ============================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 1 item                                                            
+
+tests/test_ping.py .                                                  [100%]
+
+============================= 1 passed in 0.10s =============================
+```
+
+## New Project Structure
+
+```
+├── docker-compose.yml
+├── project
+│   ├── aerich.ini
+│   ├── app
+│   │   ├── api
+│   │   │   ├── __init__.py
+│   │   │   └── ping.py
+│   │   ├── config.py
+│   │   ├── db.py
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── models
+│   │   │   ├── __init__.py
+│   │   │   └── tortoise.py
+│   │   └── __pycache__
+│   │       ├── config.cpython-39.pyc
+│   │       ├── __init__.cpython-39.pyc
+│   │       └── main.cpython-39.pyc
+│   ├── db
+│   │   ├── create.sql
+│   │   └── Dockerfile
+│   ├── Dockerfile
+│   ├── entrypoint.sh
+│   ├── migrations
+│   │   └── models
+│   │       └── 0_20210913132135_init.sql
+│   ├── poetry.lock
+│   ├── pyproject.toml
+│   ├── requirements.txt
+│   └── tests
+│       ├── conftest.py
+│       ├── __init__.py
+│       └── test_ping.py
+└── README.md
+```
 
 # Others
 
