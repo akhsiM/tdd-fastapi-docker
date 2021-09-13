@@ -25,6 +25,15 @@
   - [Kill the containers](#kill-the-containers)
   - [Turn off schema auto-generation](#turn-off-schema-auto-generation)
   - [Install and configure Aerich](#install-and-configure-aerich)
+- [Pytest](#pytest)
+  - [Setup](#setup)
+  - [Setting up Fixtures](#setting-up-fixtures)
+  - [Fire up](#fire-up)
+  - [Writing Tests](#writing-tests)
+  - [How to write tests](#how-to-write-tests)
+- [Others](#others)
+  - [Anatomy of a test](#anatomy-of-a-test)
+  - [GivenWhenThen](#givenwhenthen)
 
 # Introduction
 
@@ -803,5 +812,168 @@ web_dev=# \dt
 web_dev=# \q
 ```
 
+# Pytest
+
+## Setup
+
+`pytest` is a framework that makes building simple and scalable tests easy. Tests are expressive and read-able, no boilerplate code is required. We can get started in minutes with a small unit test, or even a complex functional test for our application.
+
+```sh
+$ mkdir project/tests
+$ touch project/tests/{__init__.py,conftest.py,test_ping.py}
+```
+
+By default, `pytest` will **auto-discover** test files that start or end with `test` e.g `test_*.py` or `*_test.py`. Test functions must also begin with `test_`, and if we want to use class-based they must begin with `Test`.
+
+## Setting up Fixtures
+
+We need to define a `test_app` fixture in `conftest.py`.
+
+**What are Fixtures?** 
+
+A fixture provides a defined, reliable and consistent context for the test. This could include environment (e.g database) or content (i.e dataset). Fixtures define the steps and data that constitute the *arrange* phase of a test (see [Anatomy of a test](#anatomy-of-a-test)). They can also be used to defined a test's *act* phase.
+
+The services, state, or other operating environments set up by fixtures are accessed by test functions through arguments. For each fixture used by a test function, there is typically a parameter (named after the fixture) in the test function's definition.
+
+More about fixtures: [All You Need to Know to Start Using Fixtures in Your pytest Code](https://pybit.es/articles/pytest-fixtures/)
+
+```py
+# project/tests/conftest.py
 
 
+```
+
+Here, we imported `TestClient` from `starlette`. This allows us to make requests against our ASGI application, using the `requests` library. The test client exposts the same interface as any other `requests` session. By default, `TestClient` will raise any exceptions that occur in the application. In the occasions that we want to test the content of the 500 error messages rather than allowing the client to raise the exception, we can do `client = TestClient(app, raise_server_exceptions=False)`.
+
+Then, we override the dependencies using the `dependency_overrides` attribute. We do this by putting the original dependency `get_setting` as a key and as a value, the dependency override `get_settings_override`.
+
+Fixtures are reusable objects for tests. Fixtures that require network access depend on connectivity and are usually time-expensive to create. Therefore, we can add a scope parameter to configure how often a fixture is invoked:
+1. function = once per test function (default)
+2. class - once per test class
+3. module - once per test module
+4. session - once per test session
+
+Within the `test_app` fixture, all code before the `yield` statement serves as **setup code**, whilst everything after serves as **teardown**. *([Fixture finalization / executing teardown code](https://docs.pytest.org/en/latest/explanation/fixtures.html#improvements-over-xunit-style-setup-teardown-functions))*
+
+## Fire up
+
+We also need to
+```sh
+$ poetry add pytest requests
+```
+
+Then, the docker images needs to be rebuilt:
+```sh
+$ docker-compose up -d --build
+```
+
+With the containers up and running, we can run the test:
+```py
+============================ test session starts ============================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 0 items                                                           
+
+=========================== no tests ran in 0.01s ===========================
+```
+
+We have no test, so this is expected.
+
+## Writing Tests
+
+Let's add a quick test to `test_ping.py`
+```py
+from app import main
+
+
+def test_ping(test_app):
+    response = test_app.get('ping')
+    assert response.status_code == 200
+    assert response.json() == {
+        'environment': 'dev',
+        'ping': 'pong!',
+        'testing': True    
+    }
+```
+
+This is the beauty of `pytest` - simplicty. Unlike `unittest` where we need to import modules, create a class and define testing functions within that class, we simply need to write the testing function.
+
+In order to use the fixture that we created in the previous step, we simply needed to pass it in as an argument.
+
+Let's run the test again:
+```sh
+$ docker-compose exec web python -m pytest
+============================ test session starts ============================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 1 item                                                            
+
+tests/test_ping.py .                                                  [100%]
+
+============================= 1 passed in 0.13s =============================
+```
+
+## How to write tests
+
+When writing tests, we should try to follow the [GivenWhenThen](#givenwhenthen) pattern to help make the process of writing tests easier and faster.
+
+Using this pattern also helps communicate the purpose of our tests better so that the code is easier to read by our future self, as well as our colleagues.
+
+# Others
+
+## Anatomy of a test
+
+In the simplest terms, a test is meant to look at the result of a particular behaviour and **make sure that the result aligns with our expectation**. 
+
+**Behaviour** is the way in which some system **acts in response** to a particular situation and/or stimuli. The most important thing is *what* was done, not *how* or *why*.
+
+The challenging part of writing a test is the fact that behaviour isn't something that can be empirically measured.
+
+A test can be broken down into four steps:
+1. **Arrange**
+
+    This is where we prepare the **context** for our test. In this step we line up the dominoes so that the next step **act** can do its thing in one, state-changing step. This can mean a range of things including preparing objects, starting/killing services, entering records into a database, or even things like defining a URL to query, generating some credentials for a user that doesn't exist or just simply waiting for some process to finish.
+
+2. **Act**
+
+    This is a singular, state-changing action that kicks off the **behaviour** we want to test. This behaviour is what carries out the changing of the state of the **system under test** (SUT). It is the resulting changed state that we look at to make a judgement about the behaviour. This is normally a function/method call.
+
+3. **Assert**
+
+    This is where we look at the resulting state and check if it looks how we'd expect after the dust has settled. In this step, we gather evidence to stay the behaviour does/ does not align with our expectation. For example, if something is expected to be green, we do `assert thing == 'green'`
+
+4. **Cleanup**
+
+    This is where the test picks up after itself so that the other tests aren't influenced by it.
+
+At its heart, the test is ultimately the **act** and **assert** steps. The **behaviour** exists between **act** and **assert**.
+
+## GivenWhenThen
+
+Given-When-Then is a style of representing test to specify the behaviours of a system using Specifications By Example. It was developed as part of Behaviour-Driven-Development (BDD). It appears as a structuring approach of many testing frameworks. One can look at it as a **reformulation of the Four-Phase Test Pattern** above.
+
+The essential idea is to break down writing a test (scenario) into **three** main sections:
+- The **given** part describes the state of the world before we begin the behaviour we are specifying in this scenario. We can think of it as the **pre-conditions** to the test.
+- The **when** section is that behaviour we are specifying.
+- The **then** section describes the changes we expect due to the specified behaviour.
+
+| **State** | **Explanation** | **Code** |
+| :----: | :---: | :----: |
+| Given | the state of the application before the test runs | setup code, fixtures, database state | 
+| When | the behaviour/logic being tested | code under test |
+| Then | the expected changes based on the behaviour | asserts |
+
+Example:
+```
+Feature: User trading stocks
+  Scenario: User requests a sell before close of trading
+    Given I have 100 shares of MSFT stock
+      And I have 150 shares of APPL stock
+      And the time is before close of trading
+    
+    When I ask to sell 20 shares of MSFT stock
+      
+    Then I should have 80 shares of MSFT stock
+     And I should have 150 shares of APPL stock
+     And a sell order for 20 shares of MSFT stock should have been created and executed
+```
