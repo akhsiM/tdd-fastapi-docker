@@ -34,6 +34,9 @@
 - [App Structure and Refactoring](#app-structure-and-refactoring)
   - [`APIRouter`](#apirouter)
   - [New Project Structure](#new-project-structure)
+- [Database Init](#database-init)
+- [Generate schema instead of using `aerich` (situational)](#generate-schema-instead-of-using-aerich-situational)
+- [Using `aerich` instead](#using-aerich-instead)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -1092,6 +1095,198 @@ tests/test_ping.py .                                                  [100%]
 │       └── test_ping.py
 └── README.md
 ```
+
+# Database Init
+
+Let's continue to clean up `project/app/main.py` by moving `register_tortoise` helper to `project/app/db.py`.
+
+```py
+#project/app/db.py
+import os
+from fastapi import FastAPI
+from tortoise.contrib.fastapi import register_tortoise
+
+
+TORTOISE_ORM = {
+    "connections": {"default": os.environ.get('DATABASE_URL')},
+    "apps": {
+        "models": {
+            "models": ["app.models.tortoise", "aerich.models"],
+            "default_connection": "default",
+        },
+    },
+}
+
+
+def init_db(app: FastAPI) -> None:
+    register_tortoise(
+        app,
+        db_url=os.environ.get("DATABASE_URL"),
+        modules={"models": ["app.models.tortoise"]},
+        generate_schemas=False,
+        add_exception_handlers=True,
+    )
+```
+
+```py
+# project/app/main.py
+import os
+from fastapi import FastAPI, Depends
+from tortoise.contrib.fastapi import register_tortoise
+from app.api import ping
+from app.db import init_db
+
+
+log = logging.getLogger('uvicorn')
+
+def create_application() -> FastAPI:
+    application = FastAPI()
+    application.include_router(ping.router)
+
+    return application
+
+
+app = create_application()
+
+
+@app.on_event('startup')
+async def startup_event():
+    log.info('App starting up...')
+    init_db(app)
+
+
+@app.on_event('shutdown')
+async def shutdown_event():
+    log.info('App shutting down...')
+```
+
+What we have done here is adding the `startup` and `shutdown` event handlers. These are functions that are executed before the app starts up and when the app is shutting down respectively.
+
+To test, we bring the containers and volumes down, then bring them back up:`
+```sh
+$ docker-compose down -v
+$ docker-compose up -d --build
+```
+
+At this stage, with the brand new containers being fired up, we shouldn't see any tables in the database:
+```sh
+$ docker-compose exec web-db psql -U postgres
+psql (13.4)
+Type "help" for help.
+
+postgres=# \c web_dev
+You are now connected to database "web_dev" as user "postgres".
+web_dev=# \dt
+Did not find any relations.
+web_dev=# \q
+```
+
+# Generate schema instead of using `aerich` (situational)
+
+Instead of applying the migration via Aerich, which can be slow at times, there are scenarios where we just want to apply the schema to the database in its final desired state.
+
+To do this, we add a `generate_schema` fucntion to `db.py`:
+```py
+# project/app/db.py
+import os, logging
+from fastapi import FastAPI
+from tortoise import Tortoise, run_async
+from tortoise.contrib.fastapi import register_tortoise
+
+
+log = logging.getLogger('uvicorn')
+
+
+TORTOISE_ORM = {
+    "connections": {"default": os.environ.get('DATABASE_URL')},
+    "apps": {
+        "models": {
+            "models": ["app.models.tortoise", "aerich.models"],
+            "default_connection": "default",
+        },
+    },
+}
+
+
+def init_db(app: FastAPI) -> None:
+    register_tortoise(
+        app,
+        db_url=os.environ.get("DATABASE_URL"),
+        modules={"models": ["app.models.tortoise"]},
+        generate_schemas=False,
+        add_exception_handlers=True,
+    )
+
+
+async def generate_schema() -> None:
+    log.info('Initializing Tortoise...')
+
+    await Tortoise.init(
+        db_url=os.environ.get('DATABASE_URL'),
+        modules={'models': ['models.tortoise']},
+    )
+
+    log.info("Generating Database schema via Tortoise...")
+
+    await Tortoise.generate_schemas()
+    await Tortoise.close_connecetions()
+
+
+if __name__ == '__main__':
+    run_async(generate_schema())
+```
+
+What happens here is `generate_schema` calls `Tortoise.init` to set up Tortoise, and then generates the schema.
+
+The `Tortoise.generate_schemas()` call generates schemas according to models provided to the `init()` method.
+
+Note how the `models` key provided within `register_tortoise` have the full name from with `app.`, however the one within `Tortoise.init()` only has `models.tortoise`.
+
+Now, we can run this:
+```sh
+$ docker-compose exec web python app/db.py
+```
+
+Then check to see the schema:
+```sh
+$ docker-compose exec web-db psql -U postgres
+psql (13.4)
+Type "help" for help.
+
+postgres=# \c web_dev
+You are now connected to database "web_dev" as user "postgres".
+web_dev=# \dt
+            List of relations
+ Schema |    Name     | Type  |  Owner   
+--------+-------------+-------+----------
+ public | textsummary | table | postgres
+(1 row)
+
+web_dev=# \q
+```
+
+# Using `aerich` instead
+
+Since we do actually want to use `aerich` to manage database schema, we need to:
+
+```sh
+$ docker-compose down -v 
+Stopping tdd-fastapi-docker_web_1    ... done
+Stopping tdd-fastapi-docker_web-db_1 ... done
+Removing tdd-fastapi-docker_web_1    ... done
+Removing tdd-fastapi-docker_web-db_1 ... done
+Removing network tdd-fastapi-docker_default
+
+$ docker-compose up -d --build
+...
+Creating tdd-fastapi-docker_web-db_1 ... done
+Creating tdd-fastapi-docker_web_1    ... done
+
+Ⓜ mygit/tdd-fastapi-docker/project  main ✗                           23m ⚑  
+$ docker-compose exec web aerich upgrade
+Success upgrade 0_20210913132135_init.sql
+```
+
 
 # Others
 
