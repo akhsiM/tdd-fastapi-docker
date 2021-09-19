@@ -38,9 +38,18 @@
 - [Generate schema instead of using `aerich` (situational)](#generate-schema-instead-of-using-aerich-situational)
 - [Using `aerich` instead](#using-aerich-instead)
 - [Pydantic Model](#pydantic-model)
+- [RESTful Routes using TDD](#restful-routes-using-tdd)
+  - [POST Route](#post-route)
+    - [Code](#code)
+    - [Trying out the route with HTTPie](#trying-out-the-route-with-httpie)
+  - [Testing](#testing)
+  - [GET single summary Route](#get-single-summary-route)
+  - [GET all summaries Route](#get-all-summaries-route)
+  - [Selecting Tests](#selecting-tests)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
+  - [`pytest` commands](#pytest-commands)
 
 # Introduction
 
@@ -1301,6 +1310,541 @@ class SummaryPayloadSchema(BaseModel):
     url: str
 ```
 
+# RESTful Routes using TDD
+
+Now, let's move on to setting up three new routes, following RESTful best practices with TDD:
+
+| Endpoint | HTTP Method | CRUD Method | Result |
+| :------ | :--------- | :--------- | :----- |
+| /summaries | GET | READ | Get all summaries |
+| /summaries/:id | GET | READ | Get a single summary |
+| /summaries | POST | CREATE | Add a summary |
+
+The steps that we are going to go through for each of these routes are:
+1. Write a test
+2. Run the test, ensure it fails
+3. Write just enough code to get the test to pass
+4. refactor (if needed)
+
+## POST Route
+
+Let's start with the POST route.
+
+For this first route, we are going to break the normal TDD workflow in order to establish the coding pattern that we will use for the remaining routes.
+
+### Code
+
+```py
+# project/app/api/summaries.py
+
+from fastapi import APIRouter, HTTPException
+from app.api import crud
+from app.models.pydantic import SummaryPayloadSchema, SummaryResponseSchema
+
+
+router = APIRouter()
+
+
+@router.post('/', response_model=SummaryResponseSchema, status_code=201)
+async def create_summary(payload: SummaryPayloadSchema) -> SummaryResponseSchema:
+    summary_id = await crud.post(payload)
+
+    response_object = {
+        'id': summary_id,
+        'url': payload.url
+    }
+    return response_object
+```
+
+What we have done here is:
+- Defined a handler `create_summary` that accepts a payload of type `SummaryPayloadSchema` with a URL. Essentially, when the route is hit with a POST request, FastAPI will read the body of the request and validate the data.
+- If the data is valid, the data will be available in the payload `parameter`. FastAPI also generates [JSON Schema](https://json-schema.org/) definitions that are used to automatically generate the OpenAPI schema and the API Documentation.
+- If the data is not valid, an error is immediately returned.
+- Here, we used the `async` declaration since the database communication will be asynchronous. With this, there are no blocking I/O operations in the handler.
+
+Next, we move on to create the `crud.py` module in the `project/app/api` folder:
+```py
+# project/app/api/crud.py
+
+from app.models.pydantic import SummaryPayloadSchema
+from app.models.tortoise import TextSummary
+
+
+async def post(payload: SummaryPayloadSchema) -> int:
+    summary = TextSummary(
+        url=payload.url,
+        summary='dummy summary'
+    )
+    await summary.save()
+    return summary.id
+```
+
+What we have done here is that we added a utility function called `post` for the creation of new summaries that takes a payload object, create a new `TextSummary` instance and returns the newly generated ID.
+
+Next, we need to define a new Pydantic model to be used as the `response_model`:`
+```py
+@router.post('/', response_model=SummaryResponseSchema, status_code=201)
+```
+
+```py
+# project/app/models/pydantic.py
+
+from pydantic import BaseModel
+
+
+class SummaryPayloadSchema(BaseModel):
+    url: str
+
+
+class SummaryResponseSchema(SummaryPayloadSchema):
+    id: int
+```
+
+The newly created `SummaryResponseSchema` just inherits from the `SummaryPayloadSchema` model with the addition of a new `id` field.
+
+With all of the components finished, we now need to write this new POST route with a new router in `main.py`.
+```py
+import logging
+from fastapi import FastAPI, Depends
+from tortoise.contrib.fastapi import register_tortoise
+from app.api import ping, summaries
+from app.db import init_db
+
+
+log = logging.getLogger('uvicorn')
+
+def create_application() -> FastAPI:
+    application = FastAPI()
+    application.include_router(ping.router)
+    application.include_router(summaries.router, prefix='/summaries', tags=['summaries'])
+
+    return application
+
+
+app = create_application()
+
+
+@app.on_event('startup')
+async def startup_event():
+    log.info('App starting up...')
+    init_db(app)
+
+
+@app.on_event('shutdown')
+async def shutdown_event():
+    log.info('App shutting down...')
+```
+
+The prefix URL and the tags will be applied to the OpenAPI schema for grouping operations.
+
+### Trying out the route with HTTPie
+
+```sh
+$ http --json POST http://localhost:8004/summaries/ url=http://testdriven.io
+HTTP/1.1 201 Created
+content-length: 37
+content-type: application/json
+date: Fri, 17 Sep 2021 06:55:30 GMT
+server: uvicorn
+
+{
+    "id": 1,
+    "url": "http://testdriven.io"
+}
+
+```
+
+You can also interact with the API via http://localhost:8004/docs/:
+![](./code_img/README-2021-09-17-17-01-42.png)
+
+## Testing
+
+```sh
+$ touch tests/test_summaries.py
+```
+
+```py
+# project/tests/test_summaries.py
+import json, pytest
+
+
+def test_create_summary(test_app_with_db):
+
+    url = 'http://foo.bar/'
+
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps(
+            {'url': url}
+        )
+    )
+
+    assert response.status_code == 201
+    assert response.json()['url'] == url
+```
+
+We now need to add the fixture `test_app_with_db` to `conftest.py`:
+```py
+# project/tests/conftest.py
+...
+from tortoise.contrib.fastapi import register_tortoise
+...
+@pytest.fixture(scope='module')
+def test_app_with_db():
+    app = create_application()
+    app.dependency_overrides[get_settings] = get_settings_override
+    register_tortoise(
+        app,
+        db_url=os.environ.get('DATABASE_TEST_URL'),
+        modules={'models': ['app.models.tortoise']},
+        generate_schemas=True,
+        add_exception_handles=True
+    )
+    with TestClient(app) as test_client:
+        
+        # testing
+
+        yield test_client
+
+    #tear down
+```
+
+We can now run te test:
+```sh
+$ docker-compose exec web python -m pytest                                  
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 2 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 50%]
+tests/test_summaries.py .                                                                                  [100%]
+
+=============================================== 2 passed in 0.13s ================================================
+```
+
+This test covers the happy path, if the payload matches `SummaryPayloadSchema`. We can also do the test for exception path.
+
+If we send a POST request with an empty payload to `/summaries/`, we'd see this:
+```sh
+$ http --json POST http://localhost:8004/summaries/                         
+HTTP/1.1 422 Unprocessable Entity
+content-length: 81
+content-type: application/json
+date: Sun, 19 Sep 2021 14:03:16 GMT
+server: uvicorn
+
+{
+    "detail": [
+        {
+            "loc": [
+                "body"
+            ],
+            "msg": "field required",
+            "type": "value_error.missing"
+        }
+    ]
+}
+
+```
+
+So, let's build our test:
+```py
+# project/tests/text_summaries.py
+
+...
+
+def test_create_summary_invalid_json(test_app):
+    response = test_app.post('/summaries/', data=json.dumps({}))
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'url'],
+                'msg': 'field required',
+                'type': 'value_error.missing'
+            }
+        ]
+    }
+```
+```sh
+$ docker-compose exec web python -m pytest
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 3 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 33%]
+tests/test_summaries.py ..                                                                                 [100%]
+
+=============================================== 3 passed in 0.13s ================================================
+```
+
+With this first route, we can move on to creating other routes.
+
+## GET single summary Route
+
+For this, we'll start to apply TDD and **start with a test first**.
+
+```py
+# project/tests/test_summaries
+
+def test_read_summary(test_app_with_db):
+    response = test_app_with_db.post('/summaries/', data=json.dumps({
+        'url': 'http://foo.bar/'
+    }))
+
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.get(f'/summaries/{summary_id}/')
+    assert response.status_code == 200
+
+    response_dict = response.json()
+
+    assert response_dict['id'] == summary_id
+    assert response_dict['url'] == 'http://foo.bar/'
+    assert response_dict['summary']
+    assert response_dict['created_at']
+```
+
+The test should fail, as we haven't written the route yet:
+```sh
+$ docker-compose exec web python -m pytest
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 4 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 25%]
+tests/test_summaries.py ..F                                                                                [100%]
+
+==================================================== FAILURES ====================================================
+_______________________________________________ test_read_summary ________________________________________________
+
+test_app_with_db = <starlette.testclient.TestClient object at 0x7fac2f44df40>
+
+    def test_read_summary(test_app_with_db):
+        response = test_app_with_db.post('/summaries/', data=json.dumps({
+            'url': 'http://foo.bar/'
+        }))
+    
+        summary_id = response.json()['id']
+    
+        response = test_app_with_db.get(f'/summaries/{summary_id}/')
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <Response [404]>.status_code
+
+tests/test_summaries.py:40: AssertionError
+============================================ short test summary info =============================================
+FAILED tests/test_summaries.py::test_read_summary - assert 404 == 200
+========================================== 1 failed, 3 passed in 0.18s ===========================================
+```
+
+Let's add the route handler now:
+```py
+# project/app/api/summaries.py
+
+...
+
+@router.get('/{id}/', response_model=SummarySchema)
+async def read_summary(id: int) -> SummarySchema:
+    summary = await crud.get(id)
+
+    return summary
+```
+
+Here, instead of taking a payload, we configure the URL to accept an integer parameter `{id}` instead. This is just Python f-string syntax. The `id` will come from the path, i.e `/summaries/` 
+
+We also need to add `get()` utility function to `crud.py`.
+```py
+# project/app/api/crud.py
+...
+from typing import Union
+
+...
+
+async def get(id: int) -> Union[dict, None]:
+    summary = await TextSummary.filter(id=id).first().values()
+    if summary:
+        return summary[0]
+    return None
+```
+
+Here we use the `values()` method to create a [`ValuesQuery`](https://tortoise-orm.readthedocs.io/en/latest/query.html?highlight=values#tortoise.queryset.ValuesQuery) object. This is similar to Django ORM syntax.
+
+`Union[dict, None]` is equivalent to `Optional[dict]`.
+
+
+Last but not least, we need to update `project/app/models/tortoise.py` to generate a Pydantic Model from the Tortoise Model. This is the `SummarySchema` that we use for `response_model` in `read_summary`.
+```py
+from tortoise import fields, models
+from tortoise.contrib.pydantic import pydantic_model_creator
+
+...
+
+SummarySchema = pydantic_model_creator(TextSummary)
+```
+
+..Ensure the test passes:
+
+```sh
+$ docker-compose exec web python -m pytest
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 4 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 25%]
+tests/test_summaries.py ...                                                                                [100%]
+
+=============================================== 4 passed in 0.14s ================================================
+```
+
+What if the summary ID doesn't exist?
+```py
+def test_read_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.get('/summaries/999999999/')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+```
+
+This test should fail, because in our `read_summary` handler, we call the utility `get()` method, which returns a `None` object even if the summary doesn't exist. The response would still be a `200`, not `404`.
+
+```sh
+$ docker-compose exec web python -m pytest             
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 5 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 20%]
+tests/test_summaries.py ...F                                                                               [100%]
+
+==================================================== FAILURES ====================================================
+_________________________________________ test_read_summary_incorrect_id _________________________________________
+
+test_app_with_db = <starlette.testclient.TestClient object at 0x7f4aafe59b50>
+
+    def test_read_summary_incorrect_id(test_app_with_db):
+        response = test_app_with_db.get('/summaries/999999999/')
+    
+>       assert response.status_code == 404
+E       assert 200 == 404
+E        +  where 200 = <Response [200]>.status_code
+
+tests/test_summaries.py:53: AssertionError
+============================================ short test summary info =============================================
+FAILED tests/test_summaries.py::test_read_summary_incorrect_id - assert 200 == 404
+========================================== 1 failed, 4 passed in 0.20s ===========================================
+```
+
+So, we need to update the handler so that incorrect id are handled appropriately:
+```py
+@router.get('/{id}/', response_model=SummarySchema)
+async def read_summary(id: int) -> SummarySchema:
+    summary = await crud.get(id)
+
+    if not summary:
+        raise HTTPException(status_code=404, detail='Summary not found')
+
+    return summary
+```
+
+The test should now pass:
+```sh
+$ docker-compose exec web python -m pytest
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 5 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 20%]
+tests/test_summaries.py ....                                                                               [100%]
+
+=============================================== 5 passed in 0.15s ================================================
+```
+
+## GET all summaries Route
+
+Following TDD, we first start with a test:
+```py
+def test_read_all_summaries(test_app_with_db):
+    response = test_app_with_db.post('/summaries/', data=json.dumps({
+        'url': 'http://foo.bar/'
+    }))
+
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.get('/summaries/')
+    assert response.status_code == 200
+
+    response_list = response.json()
+    assert (len(list(filter(lambda d: d['id'] == summary_id, response_list)))) == 1
+```
+
+The test should fail:
+```sh
+$ docker-compose exec web python -m pytest
+...
+E       assert 405 == 200
+E        +  where 405 = <Response [405]>.status_code
+...
+```
+
+We add the handler:
+```py
+# project/app/api/summaries.py
+...
+from typing import List
+...
+@router.get('/', response_model=List[SummarySchema])
+async def read_all_summaries() -> List[SummarySchema]:
+    return await crud.get_all()
+```
+
+Here, the `response_model` is a List of `SummarySchema` subtype.
+
+Then, the `get_all()` utility function:
+```py
+async def get_all() -> List:
+    summaries = await TextSummary.all().values()
+    return summaries
+```
+
+The test should pass now:
+```sh
+$ docker-compose exec web python -m pytest
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 6 items                                                                                                
+
+tests/test_ping.py .                                                                                       [ 16%]
+tests/test_summaries.py .....                                                                              [100%]
+
+=============================================== 6 passed in 0.17s ================================================
+```
+
+## Selecting Tests
+
+We can also select specific tests to run using substring matching. *([More here](https://docs.pytest.org/en/latest/how-to/usage.html#specifying-tests-selecting-tests))*
+
+```sh
+$ docker-compose exec web python -m pytest -k ping
+============================================== test session starts ===============================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+collected 6 items / 5 deselected / 1 selected                                                                    
+
+tests/test_ping.py .                                                                                       [100%]
+
+======================================== 1 passed, 5 deselected in 0.11s =========================================
+```
+
+
+
 # Others
 
 ## Anatomy of a test
@@ -1358,4 +1902,35 @@ Feature: User trading stocks
     Then I should have 80 shares of MSFT stock
      And I should have 150 shares of APPL stock
      And a sell order for 20 shares of MSFT stock should have been created and executed
+```
+
+## `pytest` commands
+
+```sh
+# normal run
+$ docker-compose exec web python -m pytest
+
+# disable warnings
+$ docker-compose exec web python -m pytest -p no:warnings
+
+# run only the last failed tests
+$ docker-compose exec web python -m pytest --lf
+
+# run only the tests with names that match the string expression
+$ docker-compose exec web python -m pytest -k "summary and not test_read_summary"
+
+# stop the test session after the first failure
+$ docker-compose exec web python -m pytest -x
+
+# enter PDB after first failure then end the test session
+$ docker-compose exec web python -m pytest -x --pdb
+
+# stop the test run after two failures
+$ docker-compose exec web python -m pytest --maxfail=2
+
+# show local variables in tracebacks
+$ docker-compose exec web python -m pytest -l
+
+# list the 2 slowest tests
+$ docker-compose exec web python -m pytest --durations=2
 ```
