@@ -46,6 +46,9 @@
   - [GET single summary Route](#get-single-summary-route)
   - [GET all summaries Route](#get-all-summaries-route)
   - [Selecting Tests](#selecting-tests)
+- [Deployment](#deployment)
+  - [Gunicorn and `Dockerfile.prod`](#gunicorn-and-dockerfileprod)
+  - [Heroku](#heroku)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -1842,6 +1845,58 @@ tests/test_ping.py .                                                            
 
 ======================================== 1 passed, 5 deselected in 0.11s =========================================
 ```
+
+# Deployment
+
+## Gunicorn and `Dockerfile.prod`
+
+Now that we have our routes up and tested, let's move on to getting this app deployed to Heroku.
+
+We are going to be using both **Gunicorn**, a production-grade WSGI server, and Uvicorn, in order to get the best of both worlds - concurrency and parallelism. Gunicorn will be responsible for managing multiple, concurrent Uvicorn processes.
+
+Uvicorn includes a Gunicorn worker class. This means we can set up with very little configuration. 
+
+```sh
+$ poetry add gunicorn
+```
+
+Then, we are going to be adding a new Dockerfile `Dockerfile.prod`
+```dockerfile
+FROM python:3.9.6-slim-buster
+
+RUN mkdir -p /home/app
+
+RUN addgroup --system app && adduser --system --group app
+
+ENV HOME=/home/app
+ENV APP_HOME=/home/app/web
+RUN mkdir $APP_HOME
+WORKDIR $APP_HOME
+
+ENV PYTHONBUFFERRED 1
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV ENVIRONMENT prod
+ENV TESTING 0
+
+RUN apt-get update\
+ && apt-get -y install netcat gcc postgresql \
+ && apt-get clean
+
+RUN pip install --upgrade pip
+COPY ./requirements.txt .
+RUN pip install -r requirements.txt
+RUN pip install "uvicorn[standard]==0.14.0"
+```
+
+The difference between `Dockerfile.prod` and `Dockerfile`:
+- We started with using a Python 3.8.11 image rather than 3.9.6 because `uvloop`, used by `uvicorn.workers.UvicornWorker`, doesn't support Python 3.9 yet.
+- Next, we added a `CMD` to run Gunicorn with a uvicorn worker class with two configured environment variables: `ENVIRONMENT=prod` and `TESTING=0`.
+- We also created and switched a non-root user, which is good pratice ([recommended by Heroku](https://devcenter.heroku.com/articles/container-registry-and-runtime#run-the-image-as-a-non-root-user))
+  
+## Heroku
+
+First, we need to sign up for Heroku, if we don't have an account, then install Heroku CLI.
+
 
 
 
