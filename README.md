@@ -49,6 +49,12 @@
 - [Deployment](#deployment)
   - [Gunicorn and `Dockerfile.prod`](#gunicorn-and-dockerfileprod)
   - [Heroku](#heroku)
+  - [Checking logs](#checking-logs)
+  - [Running Migration](#running-migration)
+  - [Sending a POST request](#sending-a-post-request)
+- [Code Coverage and Quality](#code-coverage-and-quality)
+  - [Code Coverage](#code-coverage)
+  - [Code Quality](#code-quality)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -1897,8 +1903,308 @@ The difference between `Dockerfile.prod` and `Dockerfile`:
 
 First, we need to sign up for Heroku, if we don't have an account, then install Heroku CLI.
 
+Create a new app
+```sh
+$ heroku create
+```
 
+Login to Heroku Container Registry, which allows us to deploy Docker images to Heroku.
+```sh
+$ heroku container:login
+```
 
+Provision a new Postgres database with the [`hobby-dev`](https://devcenter.heroku.com/articles/heroku-postgres-plans#hobby-tier) plan tier.
+```sh
+$ heroku addons:create heroku-postgresql:hobby-dev --app pure-depths-94465
+Creating heroku-postgresql:hobby-dev on ⬢ pure-depths-94465... free
+Database has been created and is available
+ ! This database is empty. If upgrading, you can transfer
+ ! data from another database with pg:copy
+Created postgresql-regular-26847 as DATABASE_URL
+Use heroku addons:docs heroku-postgresql to view documentation
+```
+![](./code_img/README-2021-09-24-17-34-17.png)
+
+Build the production image and tag it with the following format. We need to replace `<app>` with the name of the Heroku app that we just created. The `<process-type>` needs to replaced with `web` since it will just be a [web dyno](https://www.heroku.com/dynos).
+```
+registry.heroku.com/<app>/<process-type>
+```
+
+```sh
+$ docker build -f project/Dockerfile.prod -t registry.heroku.com/pure-depths-94465/web ./project
+```
+
+We can test this production image locally by spinning it up:
+```sh
+docker run --name fastapi-tdd -e PORT=8765 -e DATABASE_URL=sqlite://sqlite.db -p 5003:8765 registry.heroku.com/pure-depths-94465/web:latest
+```
+
+With this container running, we can navigate to http://localhost:5003/ping and verify that the server is OK.
+```json
+{
+  "ping": "pong!",
+  "environment": "prod",
+  "testing": false
+}
+```
+
+We can bring down the container by:
+```sh
+docker rm fastapi-tdd -f
+```
+
+Then, push the image to the registry:
+```sh
+$ docker push registry.heroku.com/pure-depths-94465/web:latest
+```
+
+After this, we need to release the image
+```sh
+$ heroku container:release web --app pure-depths-94465
+Releasing images web to pure-depths-94465... done
+```
+
+This will run the container on Heroku server. We can now view the app at http://pure-depths-94465.herokuapp.com/ping/
+
+## Checking logs
+
+During this section, Heroku encountered a platform issues, during which my app was down. I could use `heroku` to check the logs of my application like so:
+
+```sh
+$ heroku logs --tail --app pure-depths-94465
+```
+
+## Running Migration
+
+We can also apply the migrations using `heroku`:
+```sh
+$ heroku run aerich upgrade --app pure-depths-94465
+Running aerich upgrade on ⬢ pure-depths-94465... up, run.8169 (Free)
+Success upgrade 0_20210913132135_init.sql
+```
+
+## Sending a POST request
+
+```sh
+$ http --json POST https://pure-depths-94465.herokuapp.com/summaries/ url=https://hello.world
+HTTP/1.1 201 Created
+Connection: keep-alive
+Content-Length: 36
+Content-Type: application/json
+Date: Mon, 27 Sep 2021 12:13:02 GMT
+Server: uvicorn
+Via: 1.1 vegur
+
+{
+    "id": 1,
+    "url": "https://hello.world"
+}
+```
+
+# Code Coverage and Quality
+
+## Code Coverage
+
+Code coverage is the measure of much code is executed during testing. By adding Code Coverage to our test suite, we can find out who much of our code is being tested, or areas of our code that aren't covered by tests.
+
+For this, we will be using `pytest-cov`.
+```py
+$ poetry add pytest-cov==2.12.1
+```
+
+Next, we need to configure the coverage reports in a `.coveragerc` file.
+```sh
+# project/.coveragerc
+[run]
+omit = tests/*
+branch = True
+```
+
+What we have done here is excluding the test from the coverage results, as well as enabling [branch coverage measurement](https://coverage.readthedocs.io/en/latest/branch.html).
+
+After this, update the container:
+```sh
+docker-compose up -d --build
+```
+
+Then, we can run the tests with coverage:
+```sh
+docker-compose exec web python -m pytest --cov="."
+```
+
+```
+=============================================================== test session starts ===============================================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+plugins: cov-2.12.1
+collected 6 items                                                                                                                                 
+
+tests/test_ping.py .                                                                                                                        [ 16%]
+tests/test_summaries.py .....                                                                                                               [100%]
+
+----------- coverage: platform linux, python 3.9.6-final-0 -----------
+Name                     Stmts   Miss Branch BrPart  Cover
+----------------------------------------------------------
+app/__init__.py              0      0      0      0   100%
+app/api/__init__.py          0      0      0      0   100%
+app/api/crud.py             15      0      2      0   100%
+app/api/ping.py              6      0      0      0   100%
+app/api/summaries.py        20      0      2      0   100%
+app/config.py               13      2      0      0    85%
+app/db.py                   16      7      2      1    56%
+app/main.py                 19      3      0      0    84%
+app/models/__init__.py       0      0      0      0   100%
+app/models/pydantic.py       5      0      0      0   100%
+app/models/tortoise.py       9      1      0      0    89%
+----------------------------------------------------------
+TOTAL                      103     13      6      1    87%
+```
+
+We can also view a HTML version by:
+```sh
+docker-compose exec web python -m pytest --cov="." --cov-report html
+```
+
+The HTML export will be savewd in `project/htmlcov/`.
+
+We also need to add this directory, along with a newly created `.coverage` file, to `.dockerignore` and `.gitignore`.
+
+## Code Quality
+
+Linting is the process of checking code for stylistic or programming error. There are a number of commonly used linters for Python. We'll use `flake8`.
+
+```sh
+$ poetry add flake8=3.9.2
+$ poetry export > requirements.txt --without-hashes
+```
+
+We can also [configure](https://flake8.pycqa.org/en/latest/user/configuration.html) flake8 by adding `setup.cfg` to the project directory:
+```
+[flake8]
+max-line-length = 119
+```
+
+Then, update the container and run flake8.
+```sh
+$ docker-compose up -d --build
+$ docker-compose exec web flake8 .
+```
+```
+./app/config.py:20:1: W391 blank line at end of file
+./app/db.py:1:10: E401 multiple imports on one line
+./app/db.py:46:33: W292 no newline at end of file
+./app/main.py:2:1: F401 'fastapi.Depends' imported but unused
+./app/main.py:3:1: F401 'tortoise.contrib.fastapi.register_tortoise' imported but unused
+./app/main.py:10:1: E302 expected 2 blank lines, found 1
+./app/main.py:13:80: E501 line too long (89 > 79 characters)
+./app/main.py:29:37: W292 no newline at end of file
+./app/api/ping.py:9:34: E252 missing whitespace around parameter equals
+./app/api/ping.py:9:35: E252 missing whitespace around parameter equals
+./app/api/ping.py:14:6: W292 no newline at end of file
+./app/api/summaries.py:12:80: E501 line too long (81 > 79 characters)
+./app/api/summaries.py:34:32: W292 no newline at end of file
+./app/api/crud.py:24:21: W292 no newline at end of file
+./app/models/tortoise.py:4:1: E302 expected 2 blank lines, found 1
+./app/models/tortoise.py:13:52: W292 no newline at end of file
+./app/models/pydantic.py:9:12: W292 no newline at end of file
+./tests/conftest.py:1:10: E401 multiple imports on one line
+./tests/conftest.py:9:80: E501 line too long (80 > 79 characters)
+./tests/conftest.py:18:9: E265 block comment should start with '# '
+./tests/conftest.py:20:1: W293 blank line contains whitespace
+./tests/conftest.py:40:5: E265 block comment should start with '# '
+./tests/conftest.py:40:15: W292 no newline at end of file
+./tests/conftest.py:40:15: W292 no newline at end of file
+./tests/conftest.py:40:15: W292 no newline at end of file
+./tests/test_ping.py:1:1: F401 'app.main' imported but unused
+./tests/test_ping.py:10:24: W291 trailing whitespace
+./tests/test_ping.py:11:6: W292 no newline at end of file
+./tests/test_summaries.py:1:1: F401 'pytest' imported but unused
+./tests/test_summaries.py:1:12: E401 multiple imports on one line
+./tests/test_summaries.py:68:80: E501 line too long (83 > 79 characters)
+./tests/test_summaries.py:68:84: W292 no newline at end of file
+```
+
+We need to correct all of these errors, before moving on.
+
+Next, we can also add `black`, which is used for formatting the code so that it all looks the same formatting. This helps to speed up code reviews. 
+
+> Formatting becomes transparent after a while and you can focus on the content instead.
+
+```sh
+$ poetry add black
+```
+
+```sh
+$ docker-compose up -d --build
+$ docker-compose exec web black . --check
+```
+```
+would reformat app/api/ping.py
+would reformat app/config.py
+would reformat app/api/crud.py
+would reformat tests/test_ping.py
+would reformat app/main.py
+would reformat app/api/summaries.py
+would reformat app/db.py
+would reformat tests/conftest.py
+would reformat tests/test_summaries.py
+Oh no! 💥 💔 💥
+9 files would be reformatted, 6 files would be left unchanged.
+```
+
+We can first run black with the `--diff` option then apply the changes like so:
+```sh
+$ docker-compose exec web black . --diff
+
+$ docker-compose exec web black .
+```
+
+Finally, we can add `isort` to the project to quickly sort all our imports alphabetically and automatically seperate them into sections.
+
+```sh
+poetry add isort
+docker-compose up --build -d
+```
+
+Then, run with `--check-only`, and `--diff` option.
+```sh
+$ docker-compose exec web isort . --check-only
+ERROR: /usr/src/app/app/config.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/app/db.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/app/main.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/app/api/ping.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/app/api/summaries.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/app/api/crud.py Imports are incorrectly sorted and/or formatted.
+ERROR: /usr/src/app/tests/conftest.py Imports are incorrectly sorted and/or formatted.
+```
+
+```sh
+$ docker-compose exec web isort . --diff
+--- /usr/src/app/app/config.py:before   2021-09-27 12:32:16.606145
++++ /usr/src/app/app/config.py:after    2021-09-27 12:47:26.834057
+@@ -1,8 +1,8 @@
+ import logging
+ import os
+ from functools import lru_cache
+-from pydantic import BaseSettings, AnyUrl
+ 
++from pydantic import AnyUrl, BaseSettings
+ 
+...
+```
+
+Then, the changes can actually be applied like so:
+```sh
+docker-compose exec web isort .
+```
+
+Lastly, we can verify one last time that `flake8`, `black` and `isort` are all happy.
+
+```sh
+$ docker-compose exec web flake8 .
+$ docker-compose exec web black . --check
+$ docker-compose exec web isort . --check-only
+```
 
 # Others
 
