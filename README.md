@@ -55,6 +55,9 @@
 - [Code Coverage and Quality](#code-coverage-and-quality)
   - [Code Coverage](#code-coverage)
   - [Code Quality](#code-quality)
+- [Continuous Integration](#continuous-integration)
+  - [GitHub Packages](#github-packages)
+  - [GitHub Actions](#github-actions)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -2205,6 +2208,137 @@ $ docker-compose exec web flake8 .
 $ docker-compose exec web black . --check
 $ docker-compose exec web isort . --check-only
 ```
+
+# Continuous Integration
+
+Next, we will add CI via GitHub Actions, to our project. We are also going to set up GitHub Packages, a package management service, to store Docker images.
+
+## GitHub Packages
+
+GitHub Packages is a package management service that is fully integrated with GitHub. It allows us to host our software packages, publicly or privately for use within our projects on GitHub.
+
+First, we need to create a Personal Access Token with the following scope:
+```
+write:packages
+read:packages
+delete:packages
+workflow
+```
+
+Then we can build and tag the image like so:
+```sh
+$ docker build -f project/Dockerfile.prod -t docker.pkg.github.com/akhsim/tdd-fastapi-docker/summarizer:latest ./project
+```
+
+Next, we need to authenticate to GitHub Packages with Docker, using the access token we got previously.
+
+```sh
+$ docker login docker.pkg.github.com -u <USERNAME> -p <TOKEN>
+```
+
+After successful authentication, we can push the image to the Docker registry on GitHub Packages.
+```sh
+docker push docker.pkg.github.com/akhsim/tdd-fastapi-docker/summarizer:latest
+```
+
+After this, we should be able to see the package at: https://github.com/akhsim/tdd-fastapi-docker/packages
+![](./code_img/README-2021-09-27-23-03-50.png)
+
+## GitHub Actions
+
+In order to configure GitHub Actions, we start by adding a new directory called `.github` in the root of our project.
+
+Within this directory, we add another directory `workflows/`.
+
+Now, to configure one workflow, which is made up of one or more job, we create a new file `workflows/main.yml`:
+```yml
+name: Continuous Integration and Delivery
+
+on: [push]
+
+env:
+  IMAGE: docker.pkg.github.com/$(echo $GITHUB_REPOSITORY | tr '[A-Z]' '[a-z]')/summarizer
+
+jobs:
+  
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/cehckout@v2.3.4
+      - name: Log in to GitHub Packages
+        run: echo {$GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --pasword-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull Image
+        run: | 
+          docker pull ${{ env.IMAGE }}:latest || true
+      - name: Build Image
+        run: |
+          docker build \
+            --cache-from ${{ env.IMAGE }}:latest \
+            --tag ${{ env.IMAGE }}:latest \
+            --file ./project/Dockerfile.prod \
+            "./project"
+      - name: Push Image
+        run: | 
+          docker push ${{ env.IMAGE }}:latest
+  
+  test:
+    name: Test Docker Image
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v2.3.4
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull Image
+        run: |
+          docker pull ${{ env.IMAGE }}:latest || true
+      - name: Build Image
+        run: |
+          docker build \
+            --cache-from ${{ env.IMAGE }}:latest \
+            --tag ${{ env.IMAGE }}:latest \
+            --file ./project/Dockerfile.prod \
+            "./project"
+      - name: Run Container
+        run: |
+          docker run \
+            -d \
+            --name fastapi-tdd \
+            -e PORT=8765 \
+            -e ENVIRONMENT=dev \
+            -e DATABASE_TEST_URL=sqlite://sqlite.db \
+            -p 5003:8765 \
+            ${{ env.IMAGE }}:latest
+      - name: Pytest
+        run: docker exec fastapi-tdd python -m pytest .
+      - name: Flake8
+        run: docker exec fastapi-tdd python -m flake8 .
+      - name: Black
+        run: docker exec fastapi-tdd python -m black . --check
+      - name: isort
+        run: docker exec fastapi-tdd python -m isort --check-only
+```
+
+Here, after setting the global `IMAGE` environment variable, we define two jobs: `build` and `test`.
+
+In the `build` job, we:
+1. Check out the repository, so the job has access to the code base
+2. Log in to GitHub Packages
+3. Pull the image if it exists
+4. Build the image
+5. Push the image to GitHub Packages
+
+Then, after building and running the image, in the `test` job we run `pytest`, `flake8`, `black` and `isort`.
+
+After we commit, and push to GitHub, this should trigger a new build, which should pass.
+
 
 # Others
 
