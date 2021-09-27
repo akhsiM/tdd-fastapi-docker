@@ -2268,21 +2268,21 @@ jobs:
       - name: Checkout main
         uses: actions/checkout@v2.3.4
       - name: Log in to GitHub Packages
-        run: echo {$GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull Image
-        run: | 
+      - name: Pull image
+        run: |
           docker pull ${{ env.IMAGE }}:latest || true
-      - name: Build Image
+      - name: Build image
         run: |
           docker build \
             --cache-from ${{ env.IMAGE }}:latest \
             --tag ${{ env.IMAGE }}:latest \
             --file ./project/Dockerfile.prod \
             "./project"
-      - name: Push Image
-        run: | 
+      - name: Push image
+        run: |
           docker push ${{ env.IMAGE }}:latest
   
   test:
