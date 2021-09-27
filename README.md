@@ -2323,7 +2323,7 @@ jobs:
       - name: Black
         run: docker exec fastapi-tdd python -m black . -S --check
       - name: isort
-        run: docker exec fastapi-tdd python -m isort --check-only
+        run: docker exec fastapi-tdd python -m isort . --check-only
 ```
 
 Here, after setting the global `IMAGE` environment variable, we define two jobs: `build` and `test`.
