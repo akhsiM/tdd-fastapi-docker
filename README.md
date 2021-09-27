@@ -2271,18 +2271,18 @@ jobs:
         run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull image
-        run: |
+      - name: Pull Image
+        run: | 
           docker pull ${{ env.IMAGE }}:latest || true
-      - name: Build image
+      - name: Build Image
         run: |
           docker build \
             --cache-from ${{ env.IMAGE }}:latest \
             --tag ${{ env.IMAGE }}:latest \
             --file ./project/Dockerfile.prod \
             "./project"
-      - name: Push image
-        run: |
+      - name: Push Image
+        run: | 
           docker push ${{ env.IMAGE }}:latest
   
   test:
@@ -2321,7 +2321,7 @@ jobs:
       - name: Flake8
         run: docker exec fastapi-tdd python -m flake8 .
       - name: Black
-        run: docker exec fastapi-tdd python -m black . --check
+        run: docker exec fastapi-tdd python -m black . -S --check
       - name: isort
         run: docker exec fastapi-tdd python -m isort --check-only
 ```
