@@ -19,8 +19,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Troubleshooting
         run: | 
-          echo ${{ env.IMAGE }} |
-          echo ${GITHUB_ACTOR} |
+          echo ${{ env.IMAGE }}
+          echo ${GITHUB_ACTOR}
           echo ${GITHUB_TOKEN}
       - name: Pull Image
         run: | 
