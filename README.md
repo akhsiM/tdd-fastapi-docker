@@ -2378,7 +2378,7 @@ With this secret configured, we need to add a new `deploy` job to the GitHub con
       - name: Build image
         run: |
           docker build \
-            --cache-form ${{ env.IMAGE }}:latest \
+            --cache-from ${{ env.IMAGE }}:latest \
             --tag ${{ env.HEROKU_REGISTRY_IMAGE }}:latest \
             --file ./project/Dockerfile.prod \
             "./project"

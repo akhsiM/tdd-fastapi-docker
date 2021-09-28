@@ -91,7 +91,7 @@ jobs:
       - name: Build image
         run: |
           docker build \
-            --cache-form ${{ env.IMAGE }}:latest \
+            --cache-from ${{ env.IMAGE }}:latest \
             --tag ${{ env.HEROKU_REGISTRY_IMAGE }}:latest \
             --file ./project/Dockerfile.prod \
             "./project"
