@@ -63,6 +63,7 @@
 - [Continuous Integration](#continuous-integration)
   - [GitHub Packages](#github-packages)
   - [GitHub Actions](#github-actions)
+- [Continuous Delivery](#continuous-delivery)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -2344,7 +2345,84 @@ Then, after building and running the image, in the `test` job we run `pytest`, `
 
 After we commit, and push to GitHub, this should trigger a new build, which should pass.
 
+# Continuous Delivery
 
+First, we need to retrieve the [Heroku auth token](https://devcenter.heroku.com/articles/authentication):
+```sh
+heroku auth:token
+```
+
+Then, we need to save this token to a variable named `HEROKU_AUTH_TOKEN` within the repository secrets.
+
+With this secret configured, we need to add a new `deploy` job to the GitHub config file:
+```yml
+...
+
+  deploy:
+    name: Deploy to Heroku
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    env:
+      HEROKU_APP_NAME: pure-depths-94465
+      HEROKU_REGISTRY_IMAGE: registry.heroku.com/pure-depths-94465/summarizer
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v2.3.4
+      - name: Log in to GitHub Packages
+        run: echo ${GITHUB_TOKEN} | docker login -u ${GITHUB_ACTOR} --password-stdin docker.pkg.github.com
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull image
+        run: | 
+          docker pull ${{ env.IMAGE }}:latest || true
+      - name: Build image
+        run: |
+          docker build \
+            --cache-form ${{ env.IMAGE }}:latest \
+            --tag ${{ env.HEROKU_REGISTRY_IMAGE }}:latest \
+            --file ./project/Dockerfile.prod \
+            "./project"
+      - name: Log in to the Heroku Container Registry
+        run: docker login -u _ -p ${HEROKU_AUTH_TOKEN} registry.heroku.com
+        env:
+          HEROKU_AUTH_TOKEN: ${{ secrets.HEROKU_AUTH_TOKEN }}
+      - name: Push to Heroku Registry
+        run: docker push ${{ env.HEROKU_REGISTRY_IMAGE }}
+      - name: Set environment variables
+        run: |
+          echo "HEROKU_REGISTRY_IMAGE=${{ env.HEROKU_REGISTRY_IMAGE }}" >> $GITHUB_ENV
+          echo "HEROKU_AUTH_TOKEN=${{ secrets.HEROKU_AUTH_TOKEN }}" >> $GITHUB_ENV
+      - name: Release
+        run: |
+          chmod +x ./release.sh
+          ./release.sh
+```
+
+We also need to add `release.sh` to project root:
+```sh
+#!/bin/sh
+
+set -e
+
+IMAGE_ID=$(docker inspect ${HEROKU_REGISTRY_NAME} --format={{.Id}})
+PAYLOAD = '{"updates": [{"type": "web", "docker_image": "'"$IMAGE_ID"'"}]}'
+
+curl -n -X PATCH https://api.heroku.com/apps/$HEROKU_APP_NAME/formation \
+    -d "${PAYLOAD}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/vnd.heroku+json; version=3.docker-releases" \
+    -H "Authorization: Bearer ${HEROKU_AUTH_TOKEN}"
+```
+
+What we are doing in this `deploy` stage is:
+1. Check out the repository so the job has access to the code base.
+2. Log in to GitHub Packages
+3. Pull the image if it exists
+4. Build and tag the new image
+5. Log in to Heroku Container Registry
+6. Push the newly built image up to the registry
+7. Set two environment variables `HEROKU_REGISTRY_IMAGE` and `HEROKU_AUTH_TOKEN` so that they can be used in `release.sh` file
+8. Run `release.sh` to create a new release via the Heroku API using the image ID
 # Others
 
 ## Anatomy of a test
