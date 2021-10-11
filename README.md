@@ -73,6 +73,7 @@
     - [PUT](#put)
     - [DELETE](#delete)
 - [Parameterizing Test Functions](#parameterizing-test-functions)
+- [Tests](#tests)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -2917,6 +2918,86 @@ def test_update_summary_invalid_keys(test_app_with_db):
 ```
 
 These three tests are pretty much the same, with difference in their inputs and expected outputs. For this, we can use `pytest.mark.parametrize` decorator to enable parameterization of arguments in order to run the same tests multiple time with different data inputs.
+
+We'll replace the three tests above with the below:
+```py
+@pytest.mark.parametrize('summary_id, payload, status_code, detail', [
+    [490128349012845, {'url': 'http://foo.bar/', 'summary': 'updated!'}, 404, 'Summary not found'], # invalid id
+    [
+        0,
+        {'url': 'https://foo.bar/', 'summary': 'updated!'},
+        422,
+        [{'loc': ['path', 'id'], 'msg': 'ensure this value is greater than 0', 'type': 'value_error.number.not_gt', 'ctx': {'limit_value':0}}]
+    ], # test id=0
+    [
+        1,
+        {},
+        422,
+        [
+            {'loc': ['body', 'url'], 'msg': 'field required', 'type': 'value_error.missing'},
+            {'loc': ['body', 'summary'], 'msg': 'field required', 'type': 'value_error.missing'}
+        ]
+    ], # test invalid json
+    [
+        1,
+        {'url': 'https://foo.bar/'},
+        422,
+        [{'loc': ['body', 'summary'], 'msg': 'field required', 'type': 'value_error.missing'}]
+    ],
+])
+def test_update_summary_invalid(test_app_with_db, summary_id, payload, status_code, detail):
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps(payload)
+    )
+    assert response.status_code == status_code
+    assert response.json()['detail'] == detail
+
+
+def test_update_summary_invalid_url(test_app):
+    response = test_app.put(
+        '/summaries/1/',
+        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+    )
+
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+# Tests
+
+Our test coverage looks OK now:
+```
+$ docker-compose exec web python -m pytest --cov="."
+========================================================================================== test session starts ===========================================================================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+plugins: cov-2.12.1
+collected 14 items                                                                                                                                                                                       
+
+tests/test_ping.py .                                                                                                                                                                               [  7%]
+tests/test_summaries.py .............                                                                                                                                                              [100%]
+
+----------- coverage: platform linux, python 3.9.6-final-0 -----------
+Name                     Stmts   Miss Branch BrPart  Cover
+----------------------------------------------------------
+app/__init__.py              0      0      0      0   100%
+app/api/__init__.py          0      0      0      0   100%
+app/api/crud.py             24      0      4      0   100%
+app/api/ping.py              6      0      0      0   100%
+app/api/summaries.py        33      0      6      0   100%
+app/config.py               13      2      0      0    85%
+app/db.py                   17      7      2      1    58%
+app/main.py                 18      3      0      0    83%
+app/models/__init__.py       0      0      0      0   100%
+app/models/pydantic.py       7      0      0      0   100%
+app/models/tortoise.py       9      1      0      0    89%
+----------------------------------------------------------
+TOTAL                      127     13     12      1    90%
+
+
+=========================================================================================== 14 passed in 0.45s ===========================================================================================
+```
 
 # Others
 
