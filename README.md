@@ -74,6 +74,14 @@
     - [DELETE](#delete)
 - [Parameterizing Test Functions](#parameterizing-test-functions)
 - [Tests](#tests)
+- [Pytest Monkeypatching](#pytest-monkeypatching)
+  - [Unit Tests](#unit-tests)
+    - [Add Summary](#add-summary)
+    - [Get Summary](#get-summary)
+    - [Remove Summary](#remove-summary)
+    - [Update Summary](#update-summary)
+    - [Tests](#tests-1)
+    - [Running tests in Parallel](#running-tests-in-parallel)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -3006,6 +3014,412 @@ $ docker-compose exec web black .
 $ docker-compose exec web isort .
 ```
 ..we'll commit and push the code.
+
+Once the deployment is complete, we can test the route with HTTPie.
+
+# Pytest Monkeypatching
+
+pytest `monkeypatch` is the act of dynamically changing a piece of code at runtime. Essentially, it allows us to override the default behaviour of a module, object, method or function without changing its source code. This is used to mock functionality in our tests.
+
+Normally `monkeypatch` is used for network request calls because it both decreases the amount of time the test takes to run, as well as makes the test more predictable since there would be less variable involved. Variables such as network connectivity, authentication, rate limitting issues would simply not be present.
+
+When `monkeypatch` is used, it replaces the function default behaviour with the new overriding behaviour. While monkeypatching (or mocking) speeds up the tests and make them more predictable, we still need to test all external communication at some points in the testing process (i.e staging), so that we can be confident that the system works as expected.
+
+We'll be using `monkeypatch` fixture to mock database calls.
+
+## Unit Tests
+
+We'll write a new file:
+```py
+# project/tests/test_summaries_unit.py
+
+import json
+from datetime import datetime
+
+import pytest
+
+from app.api import crud, summaries
+
+
+def test_create_summary(test_app, monkeypatch):
+    pass
+
+
+def test_create_summary_invalid_json(test_app):
+    response = test_app.post('/summaries/', data=json.dumps({}))
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'url'],
+                'msg': 'field required',
+                'type': 'value_error.missing'
+            }
+        ]
+    }
+
+    response = test_app.post('/summaries/', data=json.dumps({'url': 'invalid://url'}))
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+
+
+def test_read_summary(test_app, monkeypatch):
+    pass
+
+
+def test_read_summary_incorrect_id(test_app, monkeypatch):
+    pass
+
+
+def test_read_all_summaries(test_app, monkeypatch):
+    pass
+
+
+def test_remove_summary(test_app, monkeypatch):
+    pass
+
+
+def test_remove_summary_incorrect_id(test_app, monkeypatch):
+    pass
+
+
+def test_update_summary(test_app, monkeypatch):
+    pass
+
+
+@pytest.mark.parametrize(
+    "summary_id, payload, status_code, detail",
+    [
+        [
+            490128349012845,
+            {"url": "http://foo.bar/", "summary": "updated!"},
+            404,
+            "Summary not found",
+        ],  # invalid id
+        [
+            0,
+            {"url": "https://foo.bar/", "summary": "updated!"},
+            422,
+            [
+                {
+                    "loc": ["path", "id"],
+                    "msg": "ensure this value is greater than 0",
+                    "type": "value_error.number.not_gt",
+                    "ctx": {"limit_value": 0},
+                }
+            ],
+        ],  # test id=0
+        [
+            1,
+            {},
+            422,
+            [
+                {
+                    "loc": ["body", "url"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+            ],
+        ],  # test invalid json
+        [
+            1,
+            {"url": "https://foo.bar/"},
+            422,
+            [
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                }
+            ],
+        ],
+    ],
+)
+def test_update_summary_invalid(
+    test_app, monkeypatch, summary_id, payload, status_code, detail
+):
+    pass
+
+
+def test_update_summary_invalid_url(test_app):
+    response = test_app.put(
+        f'/summaries/1/',
+        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+    )
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+This is essentially the same tests as before, however we'll monkeypatch the calls to the CRUD service. Instead of using `test_app_with_db`, we are also using `test_app`.
+
+Let's make changes to individual tests:
+
+### Add Summary
+```py
+def test_create_summary(test_app, monkeypatch):
+    test_request_payload = {'url': 'https://foo.bar/'}
+    test_response_payload = {'id', 1, 'url': 'https://foo.bar/'}
+
+    async def mock_post(payload):
+        return 1
+
+    monkeypatch.setattr(crud, 'post', mock_post)
+
+    response = test_app.post('/summaries/', data=json.dumps(test_request_payload))
+
+    assert response.status_code == 201
+    assert response.json() == test_response_payload
+```
+
+What we are doing here is:
+- Set the request payload input, and the corresponding response payload output
+- Within the `test_app.post()` route handler, use the custom function `mock_post` that mimics `crud.post` to monkeypatch the `crud.post()` call. This saves us from a database trip.
+
+### Get Summary
+```py
+def test_read_summary(test_app, monkeypatch):
+    test_data = {
+        'id': 1,
+        'url': 'https://foo.bar/',
+        'summary': 'summary',
+        'created_at': datetime.utcnow().isoformat()
+    }
+
+    async def mock_get(id):
+        return test_data
+    
+    monkeypatch.setattr(crud, 'get', mock_get)
+
+    response = test_app.get('/summaries/1/')
+    assert response.status_code == 200
+    assert response.json() == test_data
+
+
+
+def test_read_summary_incorrect_id(test_app, monkeypatch):
+    async def mock_get(id):
+        return None
+    
+    monkeypatch.setattr(crud, 'get', mock_get)
+
+    response = test_app.get('/summaries/321321321312321')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+
+def test_read_all_summaries(test_app, monkeypatch):
+    test_data = [
+        {
+            'id': 1,
+            'url': 'https://foo.bar/',
+            'summary': 'summary',
+            'created_at': datetime.utcnow().isoformat(),
+        },
+        {
+            'id': 2,
+            'url': 'https://hello.world/',
+            'summary': 'summary',
+            'created_at': datetime.utcnow().isoformat()
+        }
+    ]
+
+    async def mock_get_all():
+        return test_data
+
+    monkeypatch.setattr(crud, 'get_all', mock_get_all)
+
+    response = test_app.get('/summaries/')
+    assert response.status_code == 200
+    assert response.json() == test_data
+```
+
+### Remove Summary
+```py
+def test_remove_summary(test_app, monkeypatch):
+    async def mock_get(id):
+        return {
+            'id': 1,
+            'url': 'https://foo.bar/',
+            'summary': 'summary',
+            'created_at': datetime.utcnow().isoformat()
+        }
+
+    monkeypatch.setattr(crud, 'get', mock_get)
+
+    async def mock_delete(id):
+        return id
+
+    monkeypatch.setattr(crud, 'delete', mock_delete)
+
+    response = test_app.delete('/summaries/1/')
+    assert response.status_code == 200
+    assert response.json() == {'id': 1, 'url': 'https://foo.bar/'}
+
+
+def test_remove_summary_incorrect_id(test_app, monkeypatch):
+    async def mock_get(id):
+        return None
+    
+    monkeypatch.setattr(crud, 'get', mock_get)
+
+    response = test_app.delete('/summaries/2/')
+    assert response.status_code == 404
+    assert response.json()['detail'] = 'Summary not found'
+```
+
+### Update Summary
+```py
+def test_update_summary(test_app, monkeypatch):
+    test_request_payload = {'url': 'http://foo.bar/', 'summary': 'updated!'}
+    test_response_payload = {
+        'id': 1,
+        'url': 'https://foo.bar/',
+        'summary': 'summary123',
+        'created_at': datetime.utcnow().isoformat(),
+    }
+
+    async def mock_put(id, payload):
+        return test_response_payload
+    
+    monkeypatch.setattr(crud, 'put', mock_put)
+
+    response = test_app.put('/summaries/1/', data=json.dumps(test_request_payload))
+
+    assert response.status_code == 200
+    assert response.json() == test_response_payload
+
+
+@pytest.mark.parametrize(
+    "summary_id, payload, status_code, detail",
+    [
+        [
+            490128349012845,
+            {"url": "http://foo.bar/", "summary": "updated!"},
+            404,
+            "Summary not found",
+        ],  # invalid id
+        [
+            0,
+            {"url": "https://foo.bar/", "summary": "updated!"},
+            422,
+            [
+                {
+                    "loc": ["path", "id"],
+                    "msg": "ensure this value is greater than 0",
+                    "type": "value_error.number.not_gt",
+                    "ctx": {"limit_value": 0},
+                }
+            ],
+        ],  # test id=0
+        [
+            1,
+            {},
+            422,
+            [
+                {
+                    "loc": ["body", "url"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+            ],
+        ],  # test invalid json
+        [
+            1,
+            {"url": "https://foo.bar/"},
+            422,
+            [
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                }
+            ],
+        ],
+    ],
+)
+def test_update_summary_invalid(
+    test_app, monkeypatch, summary_id, payload, status_code, detail
+):
+    async def mock_put(id, payload):
+        return None
+    
+    monkeypatch.setattr(crud, 'put', mock_put)
+
+    response = test_app.put(f'/summaries/{summary_id}/', data=json.dumps(payload))
+
+    assert response.status_code == status_code
+    assert response.json()['detail'] == detail
+
+
+def test_update_summary_invalid_url(test_app):
+    response = test_app.put(
+        f'/summaries/1/',
+        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+    )
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+### Tests
+
+At this stage, all of our tests should pass:
+```sh
+$ docker-compose exec web python -m pytest --cov="." -s
+========================================================================================== test session starts ===========================================================================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+plugins: cov-2.12.1
+collected 27 items                                                                                                                                                                                       
+
+tests/test_ping.py .
+tests/test_summaries.py .............
+tests/test_summaries_unit.py .............
+
+----------- coverage: platform linux, python 3.9.6-final-0 -----------
+Name                     Stmts   Miss Branch BrPart  Cover
+----------------------------------------------------------
+app/__init__.py              0      0      0      0   100%
+app/api/__init__.py          0      0      0      0   100%
+app/api/crud.py             24      0      4      0   100%
+app/api/ping.py              6      0      0      0   100%
+app/api/summaries.py        33      0      6      0   100%
+app/config.py               13      2      0      0    85%
+app/db.py                   17      7      2      1    58%
+app/main.py                 18      3      0      0    83%
+app/models/__init__.py       0      0      0      0   100%
+app/models/pydantic.py       7      0      0      0   100%
+app/models/tortoise.py       9      1      0      0    89%
+----------------------------------------------------------
+TOTAL                      127     13     12      1    90%
+
+
+=========================================================================================== 27 passed in 0.55s ===========================================================================================
+```
+
+### Running tests in Parallel
+
+Thanks to `monkeypatch`, we are no longer hitting a database. So we can run these tests in parallel with `pytest-xdist`.
+
+```sh
+$ poetry add
+$ docker-compose up -d --build
+```
+
+We can now run the unit tests in parallel:
+```py
+
+```
+
 
 
 # Others

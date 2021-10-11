@@ -54,5 +54,5 @@ async def update_summary(
     summary = await crud.put(id, payload)
     if not summary:
         raise HTTPException(status_code=404, detail="Summary not found")
-
+    
     return summary

@@ -18,6 +18,7 @@ pytest-cov = "2.12.1"
 flake8 = "3.9.2"
 black = "^21.9b0"
 isort = "5.9.1"
+pytest-xdist = "^2.4.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
