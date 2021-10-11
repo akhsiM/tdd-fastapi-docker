@@ -64,6 +64,15 @@
   - [GitHub Packages](#github-packages)
   - [GitHub Actions](#github-actions)
 - [Continuous Delivery](#continuous-delivery)
+- [Remaining Routes](#remaining-routes)
+  - [DELETE route](#delete-route)
+  - [PUT route](#put-route)
+  - [Additional Validation](#additional-validation)
+    - [GET](#get)
+    - [POST](#post)
+    - [PUT](#put)
+    - [DELETE](#delete)
+- [Parameterizing Test Functions](#parameterizing-test-functions)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -2423,6 +2432,492 @@ What we are doing in this `deploy` stage is:
 6. Push the newly built image up to the registry
 7. Set two environment variables `HEROKU_REGISTRY_IMAGE` and `HEROKU_AUTH_TOKEN` so that they can be used in `release.sh` file
 8. Run `release.sh` to create a new release via the Heroku API using the image ID
+
+After this, our app will be automatically deployed to Heroku whenever we push to GitHub!
+
+# Remaining Routes
+
+For the remaining routes which are DELETE and PUT route, we'll follow the same steps which are:
+1. Write a test
+2. Run the test, ensuring it fails
+3. Write just enough code to get the test to pass
+4. Refactor (if needed)
+
+## DELETE route
+
+First, we'll write the tests:
+```py
+# project/tests/test_summaries.py
+...
+def test_delete_summary(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://delete.me/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.delete(f'/summaries/{summary_id}/')
+    assert response.status_code == 200
+    assert response.json() == {'id': summary_id, 'url': 'https://delete.me/'}
+
+
+def test_delete_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.delete('/summaries/999999999/')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+```
+
+When we run `pytest` now, the new tests will both fail. We better start writing the route handler:
+```py
+# project/app/api/summaries.py
+...
+@router.delete('/{id}/', response_model=SummaryResponseSchema)
+async def delete_summary(id: int) -> SummaryResponseSchma:
+    summary = await crud.get(id)
+    if not summary:
+        raise HTTPException(status_code=404, detail='Summary not found')
+    
+    await crud.delete(id)
+    return summary
+```
+
+We'd also need to add the `delete()` method to the `crud` utility.
+```py
+# project/app/api/crud.py
+...
+async def delete(id: int) -> int:
+    summary = await TextSummary.filter(id=id).first().delete()
+    return summary
+```
+
+voila!
+```
+$ docker-compose exec web python -m pytest
+========================================================================================== test session starts ===========================================================================================
+platform linux -- Python 3.9.6, pytest-6.2.5, py-1.10.0, pluggy-0.13.1
+rootdir: /usr/src/app
+plugins: cov-2.12.1
+collected 8 items                                                                                                                                                                                        
+
+tests/test_ping.py .                                                                                                                                                                               [ 12%]
+tests/test_summaries.py .......                                                                                                                                                                    [100%]
+
+=========================================================================================== 8 passed in 0.19s ============================================================================================
+```
+
+## PUT route
+
+For this route, we need to add a bunch of tests:
+```py
+# project/tests/test_summaries
+...
+def test_update_summary(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://update.me/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({'url': 'https://updated.me/', 'summary': 'updated!'})
+    )
+    assert response.status_code == 200
+
+    response_dict = response.json()
+    assert response_dict['id'] == summary_id
+    assert response_dict['url'] == 'https://updated.me/'
+    assert respones_dict['summary'] == 'updated!'
+    assert response_dict['created_at']
+
+
+def test_update_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.put(
+        '/summaries/99912321312/',
+        data=json.dumps({
+            'url': 'https://invalid.me/', 'summary': 'updated!'
+        })
+    )
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+
+def test_update_summary_invalid_json(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({})
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'url'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            },
+            {
+                'loc': ['body', 'summary'],
+                'msg': 'field required',
+                'type': 'value_error.missing'
+            }
+        ]
+    }
+
+
+def test_update_summary_invalid_keys(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'summary'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            }
+        ]
+    }
+```
+
+Then, add the handler:
+```py
+# project/app/api/summaries
+...
+@router.put('/{id}/', response_model=SummarySchema)
+async def update_summary(id: int, payload: SummaryUpdatePayloadSchema) -> SummarySchema:
+    summary = await crud.put(id, payload)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+
+    return summary
+```
+
+We also need to configure the new Pydantic model `SummaryUpdatePayloadSchema`, with the added summary field:
+```py
+# project/app/models/pydantic
+...
+class SummaryUpdatePayloadSchema(SummaryPayloadSchema):
+    summary: str
+```
+
+When we import the pydantic models, we do it like so:
+```py
+from app.models.pydantic import (  # isort:skip
+    SummaryPayloadSchema, 
+    SummaryResponseSchema, 
+    SummaryUpdatePayloadSchema
+)
+```
+
+The `# isort:skip` bit is an action comment to prevent isort from formatting the associated import.
+
+Last but not least, the utility function:
+```py
+# project/app/api/crud
+...
+async def put(id: int, payload:SummaryPayloadSchema) -> Union[dict. None]:
+    sumamry = await TextSummary.filter(id=id).update(url=payload.url, summary=payload.summary)
+    if summary:
+        updated_summary = await TextSummary.filter(id=id).first().values()
+        return updated_summary[0]
+    
+    return None
+```
+
+The tests should pass now!
+
+## Additional Validation
+
+Let's add some additional validation to the routes:
+1. `id` should be greater than `0` for reading, updating, and deleting a single summary.
+2. The URL is valid for adding and updating a summary
+
+
+### GET
+
+We'll add some extra tests to `test_read_summary_incorrect_id`:
+```py
+def test_read_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.get('/summaries/999999999/')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+    response = test_app_with_db.get('/summaries/0/')
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['path', 'id'],
+                'msg': 'ensure this value is greater than 0',
+                'type': 'value_error.number.not_gt',
+                'ctx': {'limit_value': 0},
+            }
+        ]
+    }
+```
+
+The test fails because the HTTP Response status is a 404, not 422.
+
+We'll update the route handler:
+```py
+from fastapi import Path
+...
+@router.get('/{id}/', response_model=SummarySchema)
+async def read_summary(id: int = Path(..., gt=0)) -> SummarySchema:
+    summary = await crud.get(id)
+
+    if not summary:
+        raise HTTPException(status_code=404, detail='Summary not found')
+
+    return summary
+```
+
+`fastapi.Path` can be used to declare validation for path parameters. As a path parameter is always required, we should declare it with `...` to mark it as required. Nevertheless, even if we declare it with `None` or set a default value, it would not affect the value as it would still be required.
+
+Here, we used `Path` to declare the following validation/metadata to the parameter:
+1. `...` - the value is always required ([Ellipsis](https://docs.python.org/3/library/constants.html#Ellipsis))
+2. `gt=0` - The value must always be greater than 0.
+
+The tests will pass now.
+
+If we tried the API documentation, we'd see the error as well:
+![](./code_img/README-2021-10-11-23-02-42.png)
+
+### POST
+
+We'll add some more tests to `test_create_summary_invalid_json`:
+```py
+# test_summaries
+...
+def test_create_summary_invalid_json(test_app):
+    response = test_app.post('/summaries/', data=json.dumps({}))
+
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'url'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            }
+        ]
+    }
+
+    response = test_app.post('/summaries/', data=json.dumps({'url': 'invalid://url'}))
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+The test will fail now, as the POST request will be successful.
+```
+>       assert response.status_code == 422
+E       assert 201 == 422
+E        +  where 201 = <Response [201]>.status_code
+```
+
+In order to get the `url` field to only accept URL, we'll update the Pydantic model `SummaryPayloadSchema` with the `AnyHttpUrl` validator:
+```py
+from pydantic import BaseModel, AnyHttpUrl
+
+
+class SummaryPayloadSchema(BaseModel):
+    url: AnyHttpUrl
+```
+
+With this small change, the new test will pass.
+
+### PUT
+
+We'll update `test_update_summary_invalid_id` and include the test with invalid URL.
+```py
+def test_update_summary_invalid_keys(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'summary'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            }
+        ]
+    }
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}',
+        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+    )
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+..as well as `test_update_summary_incorrect_id`:
+```py
+def test_update_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.put(
+        '/summaries/99912321312/',
+        data=json.dumps({
+            'url': 'https://invalid.me/', 'summary': 'updated!'
+        })
+    )
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+    response = test_app_with_db.put(
+        '/summaries/0/',
+        data=json.dumps({'url': 'http://foo.bar/', 'summary': 'updated!'})
+    )
+```
+
+Update the handler as well:
+```py
+@router.put('/{id}/', response_model=SummarySchema)
+async def update_summary(payload: SummaryUpdatePayloadSchema, id: int = Path(..., gt=0)) -> SummarySchema:
+    summary = await crud.put(id, payload)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+
+    return summary
+```
+
+Note that we don't need to make any further update for the invalid URL validation, because the change we previously made was on the Pydantic model, that is consumed by `update_summary` router handler.
+
+### DELETE
+
+```py
+def test_delete_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.delete('/summaries/999999999/')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+    response = test_app_with_db.delete('/summaries/0/')
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['path', 'id'],
+                'msg': 'ensure this value is greater than 0',
+                'type': 'value_error.number.not_gt',
+                'ctx': {'limit_value': 0}
+            }
+        ]
+    }
+```
+
+The test will fail now. We just need to change the route handler:
+```py
+@router.delete('/{id}/', response_model=SummaryResponseSchema)
+async def delete_summary(id: int = Path(..., gt=0)) -> SummaryResponseSchema:
+    summary = await crud.get(id)
+    if not summary:
+        raise HTTPException(status_code=404, detail='Summary not found')
+
+    await crud.delete(id)
+    return summary
+```
+
+# Parameterizing Test Functions
+
+Parameterized tests allow any developer to run the same tests multiple times with different data inputs, instead of having the inputs hardcoded and fixed.
+
+We will be updating these three tests:
+```py
+def test_update_summary_incorrect_id(test_app_with_db):
+    response = test_app_with_db.put(
+        '/summaries/99912321312/',
+        data=json.dumps({
+            'url': 'https://invalid.me/', 'summary': 'updated!'
+        })
+    )
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Summary not found'
+
+    response = test_app_with_db.put(
+        '/summaries/0/',
+        data=json.dumps({'url': 'http://foo.bar/', 'summary': 'updated!'})
+    )
+
+
+def test_update_summary_invalid_json(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({})
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'url'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            },
+            {
+                'loc': ['body', 'summary'],
+                'msg': 'field required',
+                'type': 'value_error.missing'
+            }
+        ]
+    }
+
+
+def test_update_summary_invalid_keys(test_app_with_db):
+    response = test_app_with_db.post(
+        '/summaries/', data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    summary_id = response.json()['id']
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({'url': 'https://foo.bar/'})
+    )
+    assert response.status_code == 422
+    assert response.json() == {
+        'detail': [
+            {
+                'loc': ['body', 'summary'],
+                'msg': 'field required',
+                'type': 'value_error.missing',
+            }
+        ]
+    }
+
+    response = test_app_with_db.put(
+        f'/summaries/{summary_id}/',
+        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+    )
+    assert response.status_code == 422
+    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+```
+
+These three tests are pretty much the same, with difference in their inputs and expected outputs. For this, we can use `pytest.mark.parametrize` decorator to enable parameterization of arguments in order to run the same tests multiple time with different data inputs.
+
 # Others
 
 ## Anatomy of a test
