@@ -1,69 +1,69 @@
 import json
+
 import pytest
 
 
 def test_create_summary(test_app_with_db):
-    url = 'http://foo.bar/'
+    url = "http://foo.bar/"
 
-    response = test_app_with_db.post('/summaries/', data=json.dumps({'url': url}))
+    response = test_app_with_db.post("/summaries/", data=json.dumps({"url": url}))
 
     assert response.status_code == 201
-    assert response.json()['url'] == url
+    assert response.json()["url"] == url
 
 
 def test_create_summary_invalid_json(test_app):
-    response = test_app.post('/summaries/', data=json.dumps({}))
+    response = test_app.post("/summaries/", data=json.dumps({}))
 
     assert response.status_code == 422
     assert response.json() == {
-        'detail': [
+        "detail": [
             {
-                'loc': ['body', 'url'],
-                'msg': 'field required',
-                'type': 'value_error.missing',
+                "loc": ["body", "url"],
+                "msg": "field required",
+                "type": "value_error.missing",
             }
         ]
     }
 
-    response = test_app.post('/summaries/', data=json.dumps({'url': 'invalid://url'}))
+    response = test_app.post("/summaries/", data=json.dumps({"url": "invalid://url"}))
     assert response.status_code == 422
-    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
-
+    assert response.json()["detail"][0]["msg"] == "URL scheme not permitted"
 
 
 def test_read_summary(test_app_with_db):
     response = test_app_with_db.post(
-        '/summaries/', data=json.dumps({'url': 'http://foo.bar/'})
+        "/summaries/", data=json.dumps({"url": "http://foo.bar/"})
     )
 
-    summary_id = response.json()['id']
+    summary_id = response.json()["id"]
 
-    response = test_app_with_db.get(f'/summaries/{summary_id}/')
+    response = test_app_with_db.get(f"/summaries/{summary_id}/")
     assert response.status_code == 200
 
     response_dict = response.json()
 
-    assert response_dict['id'] == summary_id
-    assert response_dict['url'] == 'http://foo.bar/'
-    assert response_dict['summary']
-    assert response_dict['created_at']
+    assert response_dict["id"] == summary_id
+    assert response_dict["url"] == "http://foo.bar/"
+    assert response_dict["summary"]
+    assert response_dict["created_at"]
 
 
 def test_read_summary_incorrect_id(test_app_with_db):
-    response = test_app_with_db.get('/summaries/999999999/')
+    response = test_app_with_db.get("/summaries/999999999/")
 
     assert response.status_code == 404
-    assert response.json()['detail'] == 'Summary not found'
+    assert response.json()["detail"] == "Summary not found"
 
-    response = test_app_with_db.get('/summaries/0/')
+    response = test_app_with_db.get("/summaries/0/")
     assert response.status_code == 422
     assert response.json() == {
-        'detail': [
+        "detail": [
             {
-                'loc': ['path', 'id'],
-                'msg': 'ensure this value is greater than 0',
-                'type': 'value_error.number.not_gt',
-                'ctx': {'limit_value': 0},
+                "loc": ["path", "id"],
+                "msg": "ensure this value is greater than 0",
+                "type": "value_error.number.not_gt",
+                "ctx": {"limit_value": 0},
             }
         ]
     }
@@ -71,43 +71,43 @@ def test_read_summary_incorrect_id(test_app_with_db):
 
 def test_read_all_summaries(test_app_with_db):
     response = test_app_with_db.post(
-        '/summaries/', data=json.dumps({'url': 'http://foo.bar/'})
+        "/summaries/", data=json.dumps({"url": "http://foo.bar/"})
     )
 
-    summary_id = response.json()['id']
+    summary_id = response.json()["id"]
 
-    response = test_app_with_db.get('/summaries/')
+    response = test_app_with_db.get("/summaries/")
     assert response.status_code == 200
 
     response_list = response.json()
-    assert (len(list(filter(lambda d: d['id'] == summary_id, response_list)))) == 1
+    assert (len(list(filter(lambda d: d["id"] == summary_id, response_list)))) == 1
 
 
 def test_delete_summary(test_app_with_db):
     response = test_app_with_db.post(
-        '/summaries/', data=json.dumps({'url': 'https://delete.me/'})
+        "/summaries/", data=json.dumps({"url": "https://delete.me/"})
     )
-    summary_id = response.json()['id']
+    summary_id = response.json()["id"]
 
-    response = test_app_with_db.delete(f'/summaries/{summary_id}/')
+    response = test_app_with_db.delete(f"/summaries/{summary_id}/")
     assert response.status_code == 200
-    assert response.json() == {'id': summary_id, 'url': 'https://delete.me/'}
+    assert response.json() == {"id": summary_id, "url": "https://delete.me/"}
 
 
 def test_delete_summary_incorrect_id(test_app_with_db):
-    response = test_app_with_db.delete('/summaries/999999999/')
+    response = test_app_with_db.delete("/summaries/999999999/")
     assert response.status_code == 404
-    assert response.json()['detail'] == 'Summary not found'
+    assert response.json()["detail"] == "Summary not found"
 
-    response = test_app_with_db.delete('/summaries/0/')
+    response = test_app_with_db.delete("/summaries/0/")
     assert response.status_code == 422
     assert response.json() == {
-        'detail': [
+        "detail": [
             {
-                'loc': ['path', 'id'],
-                'msg': 'ensure this value is greater than 0',
-                'type': 'value_error.number.not_gt',
-                'ctx': {'limit_value': 0}
+                "loc": ["path", "id"],
+                "msg": "ensure this value is greater than 0",
+                "type": "value_error.number.not_gt",
+                "ctx": {"limit_value": 0},
             }
         ]
     }
@@ -115,61 +115,91 @@ def test_delete_summary_incorrect_id(test_app_with_db):
 
 def test_update_summary(test_app_with_db):
     response = test_app_with_db.post(
-        '/summaries/', data=json.dumps({'url': 'https://update.me/'})
+        "/summaries/", data=json.dumps({"url": "https://update.me/"})
     )
-    summary_id = response.json()['id']
+    summary_id = response.json()["id"]
 
     response = test_app_with_db.put(
-        f'/summaries/{summary_id}/',
-        data=json.dumps({'url': 'https://updated.me/', 'summary': 'updated!'})
+        f"/summaries/{summary_id}/",
+        data=json.dumps({"url": "https://updated.me/", "summary": "updated!"}),
     )
     assert response.status_code == 200
 
     response_dict = response.json()
-    assert response_dict['id'] == summary_id
-    assert response_dict['url'] == 'https://updated.me/'
-    assert response_dict['summary'] == 'updated!'
-    assert response_dict['created_at']
+    assert response_dict["id"] == summary_id
+    assert response_dict["url"] == "https://updated.me/"
+    assert response_dict["summary"] == "updated!"
+    assert response_dict["created_at"]
 
 
-@pytest.mark.parametrize('summary_id, payload, status_code, detail', [
-    [490128349012845, {'url': 'http://foo.bar/', 'summary': 'updated!'}, 404, 'Summary not found'], # invalid id
+@pytest.mark.parametrize(
+    "summary_id, payload, status_code, detail",
     [
-        0,
-        {'url': 'https://foo.bar/', 'summary': 'updated!'},
-        422,
-        [{'loc': ['path', 'id'], 'msg': 'ensure this value is greater than 0', 'type': 'value_error.number.not_gt', 'ctx': {'limit_value':0}}]
-    ], # test id=0
-    [
-        1,
-        {},
-        422,
         [
-            {'loc': ['body', 'url'], 'msg': 'field required', 'type': 'value_error.missing'},
-            {'loc': ['body', 'summary'], 'msg': 'field required', 'type': 'value_error.missing'}
-        ]
-    ], # test invalid json
-    [
-        1,
-        {'url': 'https://foo.bar/'},
-        422,
-        [{'loc': ['body', 'summary'], 'msg': 'field required', 'type': 'value_error.missing'}]
+            490128349012845,
+            {"url": "http://foo.bar/", "summary": "updated!"},
+            404,
+            "Summary not found",
+        ],  # invalid id
+        [
+            0,
+            {"url": "https://foo.bar/", "summary": "updated!"},
+            422,
+            [
+                {
+                    "loc": ["path", "id"],
+                    "msg": "ensure this value is greater than 0",
+                    "type": "value_error.number.not_gt",
+                    "ctx": {"limit_value": 0},
+                }
+            ],
+        ],  # test id=0
+        [
+            1,
+            {},
+            422,
+            [
+                {
+                    "loc": ["body", "url"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                },
+            ],
+        ],  # test invalid json
+        [
+            1,
+            {"url": "https://foo.bar/"},
+            422,
+            [
+                {
+                    "loc": ["body", "summary"],
+                    "msg": "field required",
+                    "type": "value_error.missing",
+                }
+            ],
+        ],
     ],
-])
-def test_update_summary_invalid(test_app_with_db, summary_id, payload, status_code, detail):
+)
+def test_update_summary_invalid(
+    test_app_with_db, summary_id, payload, status_code, detail
+):
     response = test_app_with_db.put(
-        f'/summaries/{summary_id}/',
-        data=json.dumps(payload)
+        f"/summaries/{summary_id}/", data=json.dumps(payload)
     )
     assert response.status_code == status_code
-    assert response.json()['detail'] == detail
+    assert response.json()["detail"] == detail
 
 
 def test_update_summary_invalid_url(test_app):
     response = test_app.put(
-        '/summaries/1/',
-        data=json.dumps({'url': 'invalid://url', 'summary': 'updated!'})
+        "/summaries/1/",
+        data=json.dumps({"url": "invalid://url", "summary": "updated!"}),
     )
 
     assert response.status_code == 422
-    assert response.json()['detail'][0]['msg'] == 'URL scheme not permitted'
+    assert response.json()["detail"][0]["msg"] == "URL scheme not permitted"

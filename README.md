@@ -2999,6 +2999,15 @@ TOTAL                      127     13     12      1    90%
 =========================================================================================== 14 passed in 0.45s ===========================================================================================
 ```
 
+After running these:
+```py
+$ docker-compose exec web flake8 .
+$ docker-compose exec web black .
+$ docker-compose exec web isort .
+```
+..we'll commit and push the code.
+
+
 # Others
 
 ## Anatomy of a test
