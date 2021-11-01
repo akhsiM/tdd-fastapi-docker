@@ -82,6 +82,7 @@
     - [Update Summary](#update-summary)
     - [Tests](#tests-1)
     - [Running tests in Parallel](#running-tests-in-parallel)
+- [Text Summarization](#text-summarization)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -3419,6 +3420,23 @@ We can now run the unit tests in parallel:
 ```py
 
 ```
+
+# Text Summarization
+
+We have so far been building the skeletons and bones of our application. Let's move to the actualy functionality now.
+
+Our objective is to create real time text summarization service used for creating arcile summaries from a given URL. For this, we will need to use a scraping library to extract the text of the article, then use a ML library to generate the actual library.
+
+We could do this by using both `BeautifulSoup` for scpraing, and `Bart` for summarizing, however there is a library that will do both: `Newspaper3k`.
+
+```sh
+# install
+$ poetry add newspaper3k==0.2.8
+
+# build
+$ docker-compose up -d build
+```
+
 
 
 
