@@ -83,6 +83,8 @@
     - [Tests](#tests-1)
     - [Running tests in Parallel](#running-tests-in-parallel)
 - [Text Summarization](#text-summarization)
+  - [Background Task](#background-task)
+  - [Tests](#tests-2)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -3437,8 +3439,201 @@ $ poetry add newspaper3k==0.2.8
 $ docker-compose up -d build
 ```
 
+Then, we add a new file:
+```py
+# project/app/summarizer.py
+
+from newspaper import Article
 
 
+def generate_summary(url: str)-> str:
+    article = Article(url)
+    article.download()
+    article.parse()
+    article.nlp()
+    return article.summary
+```
+
+Here, what we have done is:
+- Create a new `Article` instance, providing it an URL
+- Download the URL, then extract its meaningful content via `parse()`, and relevant keywords via `nlp()`
+- Then, generate a summary of the article
+
+The `nlp()` method requires the `punkt` tokenizer from `nltk`, so we need to update `summarizers.py` like so:
+```py
+import nltk
+from newspaper import Article
+
+
+def generate_summary(url: str)-> str:
+    article = Article(url)
+    article.download()
+    article.parse()
+
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt')
+    finally:
+        article.nlp()
+
+    return article.summary
+```
+
+With this `generate_summary()` function, we now need to update the `post` function in `project/app/api.crud.py` to generate the summary whenever a new URL is added.
+```py
+async def post(payload: SummaryPayloadSchema) -> int:
+    article_summary = generate_summary(payload.url)
+    summary = TextSummary(url=payload.url, summary=article_summary)
+    await summary.save()
+    return summary.id
+```
+
+We can test it out:
+```sh
+$ http --json POST http://localhost:8004/summaries/ url=http://testdriven.io                                                         main ⬆ ✱
+HTTP/1.1 201 Created
+content-length: 37
+content-type: application/json
+date: Mon, 01 Nov 2021 13:03:59 GMT
+server: uvicorn
+
+{
+    "id": 1,
+    "url": "http://testdriven.io"
+}
+
+$ http GET http://localhost:8004/summaries/1/                                                                                        main ⬆ ✱
+HTTP/1.1 200 OK
+content-length: 779
+content-type: application/json
+date: Mon, 01 Nov 2021 13:05:21 GMT
+server: uvicorn
+
+{
+    "created_at": "2021-11-01T13:04:01.635327+00:00",
+    "id": 1,
+    "summary": "Our courses and tutorials teach practical application of popular tech used by both enterprise and startups.\nYou will quickly become effective in your chosen stack, as we provide pragmatic examples and detailed walkthroughs of the workings of each technology.\nThrough our courses, you will not only become more comfortable with specific tools and technologies like AWS ECS, Docker, and Flask, to name a few -- but you will also gain skills necessary to contribute to a team or launch your own exciting project.\nEvery tool taught in our courses is supported by large communities and is in high-demand by hiring managers around the globe.\nWe teach tools we love and use every day.",
+    "url": "http://testdriven.io"
+}
+```
+
+## Background Task
+
+Let's take a look at our CRUD `post` function right now:
+```py
+async def post(payload: SummaryPayloadSchema) -> int:
+    article_summary = generate_summary(payload.url)
+    summary = TextSummary(url=payload.url, summary=article_summary)
+    await summary.save()
+    return summary.id
+```
+
+The `generate_summary` function introduces a **blocking operation** into the `post` function. Both `article.download()` and `article.parse()` are fairly expensive.
+
+This is where **Background Tasks** can be super helpful: https://fastapi.tiangolo.com/tutorial/background-tasks/.
+
+With Background Task, we can return a response to the client, **before** the completion of the blocking operation.
+
+First, we take the expensive operation out of the CRUD function:
+```py
+# project/app/api/crud.py
+
+async def post(payload: SummaryPayloadSchema) -> int:
+    # article_summary = generate_summary(payload.url)
+    # summary = TextSummary(url=payload.url, summary=article_summary)
+
+    summary = TextSummary(url=payload.url, summary="")
+    await summary.save()
+    return summary.id
+```
+
+Then, we update `create_summary` to handle the background task of generating the summary:
+```py
+# project/app/api/summaries.py
+from app.summarizer import generate_summary
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Path
+
+...
+@router.post("/", response_model=SummaryResponseSchema, status_code=201)
+async def create_summary(
+    payload: SummaryPayloadSchema, background_tasks: BackgroundTasks
+) -> SummaryResponseSchema:
+    summary_id = await crud.post(payload)
+
+    background_tasks.add_task(generate_summary, summary_id, payload.url)
+
+    response_object = {"id": summary_id, "url": payload.url}
+    return response_object
+```
+
+Finally, we need to update `generate_summary`:
+```py
+import nltk
+from newspaper import Article
+
+from app.models.tortoise import TextSummary
+
+
+async def generate_summary(summary_id: int, url: str) -> str:
+    article = Article(url)
+    article.download()
+    article.parse()
+
+    try:
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        nltk.download("punkt")
+    finally:
+        article.nlp()
+
+    summary = article.summary
+
+    await TextSummary.filter(id=summary_id).update(summary=summary)
+
+```
+
+The concept is very simple. The summary is generated **after** the response is sent back to the client. Once the text summarization completes, the database is updated.
+
+This is where `async` comes in handy. We can inspect the effect like so:
+![](./code_img/README-2021-12-26-04-53-34.png)
+
+`print("returning woo hoo!")` is executed **before** `print("going to sleep")`:
+```
+returning woo hoo!
+INFO:     172.20.0.1:51558 - "POST /summaries/ HTTP/1.1" 201 Created
+going to sleep...
+```
+
+## Tests
+
+At present, if we run our test again..
+```py
+docker compose exec web python -m pytest
+```
+
+..we would see 6 failures.
+```
+E           newspaper.article.ArticleException: Article `download()` failed with HTTPSConnectionPool(host='foo.bar', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x7f5c171b2be0>: Failed to establish a new connection: [Errno -5] No address associated with hostname')) on URL https://foo.bar/
+```
+
+We need to use `monkeypatch` again to mock the `generate_summary` call that is used within `summaries.py`:
+```py
+def test_create_summary(test_app_with_db, monkeypatch):
+    def mock_generate_summary(summary_id, url):
+        return None
+
+    monkeypatch.setattr(summaries, "generate_summary", mock_generate_summary)
+
+    url = "http://foo.bar/"
+
+    response = test_app_with_db.post("/summaries/", data=json.dumps({"url": url}))
+
+    assert response.status_code == 201
+    assert response.json()["url"] == url
+```
+
+This same monkey-patching needs to be applied across all failed tests.
 
 # Others
 
