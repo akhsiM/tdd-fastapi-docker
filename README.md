@@ -86,6 +86,8 @@
   - [Background Task](#background-task)
   - [Tests](#tests-2)
 - [Advanced CI](#advanced-ci)
+  - [Multistage Docker Build](#multistage-docker-build)
+  - [Docker Caching](#docker-caching)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -3638,6 +3640,8 @@ This same monkey-patching needs to be applied across all failed tests.
 
 # Advanced CI
 
+## Multistage Docker Build
+
 In this section, we'll move on to update the CI process and set up a **multistage** Docker build for production.
 ```dockerfile
 ###########
@@ -3750,6 +3754,13 @@ We need to remember to bring down the container once done:
 $ docker rm fastapi-tdd -f
 ```
 
+## Docker Caching
+
+Next, to speed up the build on GitHub Actions, we can make changes to to `.github/workflows/main.yml`.
+
+We are now pulling, building and pushing the `builder` image using the `--target` option.
+
+See here for more on Docker caching: https://testdriven.io/blog/faster-ci-builds-with-docker-cache/
 
 # Others
 
