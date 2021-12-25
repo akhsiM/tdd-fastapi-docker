@@ -3720,8 +3720,36 @@ USER app
 CMD gunicorn --bind 0.0.0.0:$PORT app.main:app -k uvicorn.workers.UvicornWorker
 ```
 
-
 How does this work? Essentially, we create a temporary image `builder` that is used for building the Python wheels. The wheels are then copied over to the final production image and the builder image is discarded.
+
+To test locally:
+
+- First, build the image
+```sh
+$ docker build -f project/Dockerfile.prod -t web ./project
+```
+
+- Spin up the container:
+```sh
+$ docker run --name fastapi-tdd -e PORT=8765 -e DATABASE_URL=sqlite://sqlite.db -p 5003:8765 web:latest
+```
+
+Then:
+```
+GET http://localhost:5003/ping
+
+{
+  "ping": "pong!",
+  "environment": "prod",
+  "testing": false
+}
+```
+
+We need to remember to bring down the container once done:
+```sh
+$ docker rm fastapi-tdd -f
+```
+
 
 # Others
 
