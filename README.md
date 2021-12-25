@@ -88,6 +88,7 @@
 - [Advanced CI](#advanced-ci)
   - [Multistage Docker Build](#multistage-docker-build)
   - [Docker Caching](#docker-caching)
+  - [Seperate Requirements](#seperate-requirements)
 - [Others](#others)
   - [Anatomy of a test](#anatomy-of-a-test)
   - [GivenWhenThen](#givenwhenthen)
@@ -3761,6 +3762,46 @@ Next, to speed up the build on GitHub Actions, we can make changes to to `.githu
 We are now pulling, building and pushing the `builder` image using the `--target` option.
 
 See here for more on Docker caching: https://testdriven.io/blog/faster-ci-builds-with-docker-cache/
+
+## Seperate Requirements
+
+We can move development-only requirements to a new file
+
+```
+# project/requirements-dev.txt
+
+black==21.6b0
+flake8==3.9.2
+isort==5.9.1
+pytest==6.2.4
+pytest-cov==2.12.1
+pytest-xdist==2.3.0
+
+-r requirements.txt
+```
+
+We also need to update `project/Dockerfile`:
+```
+...
+RUN pip install --upgrade pip
+COPY ./requirements.txt .
+COPY ./requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
+...
+```
+
+Then, test:
+
+```sh
+$ docker compose down -v
+$ docker compose up -d --build
+$ docker compose exec web aerich upgrade
+
+$ docker compose exec web python -m pytest
+$ docker compose exec web flake8 .
+$ docker compose exec web black .
+$ docker compose exec web isort .
+```
 
 # Others
 
