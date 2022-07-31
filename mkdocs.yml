@@ -1,6 +1,6 @@
 site_name: Test-Driven Development with FastAPI and Docker
 theme:
-  name: mkdocs
+  name: readthedocs
 plugins:
   - search
 markdown_extensions:
