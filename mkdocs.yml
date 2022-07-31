@@ -1,1 +1,5 @@
-site_name: My Docs
+site_name: Test-Driven Development with FastAPI and Docker
+theme:
+  name: readthedocs
+plugins:
+  - search
